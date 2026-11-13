@@ -122,7 +122,7 @@ pnpm exec wrangler r2 bucket lifecycle add ftransfer expire-manifests manifests/
 ```
 
 ```bash
-pnpm exec wrangler r2 bucket lifecycle add ftransfer abort-uploads --abort-multipart-days 1 --force
+pnpm exec wrangler r2 bucket lifecycle add ftransfer abort-uploads files/ --abort-multipart-days 1 --force
 ```
 
 **4. Deploy.** This builds the client and attaches the custom domain `transfer.franklippes.com`, creating its DNS record. It fails if a DNS record with that name already exists: remove that record first.
