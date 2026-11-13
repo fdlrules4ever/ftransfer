@@ -1,0 +1,53 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ftransfer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+
+  // Only reachable on the custom domain: no *.workers.dev URL, no preview URLs.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "transfer.franklippes.com", "custom_domain": true }],
+
+  // Compiles client/*.ts into public/js before `wrangler dev` and `wrangler deploy`.
+  "build": {
+    "command": "pnpm run build:client",
+    "watch_dir": "client"
+  },
+
+  // The Worker runs first for every request so it can add security headers
+  // and map / and /{shareId} to the right page.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
+
+  // Private bucket: no public access and no r2.dev URL. Files are only served through this Worker.
+  "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "ftransfer" }],
+
+  // Login attempts: 5 per minute per IP (counted per Cloudflare location).
+  "ratelimits": [
+    { "name": "LOGIN_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }
+  ],
+
+  // Hourly cleanup of expired and abandoned transfers.
+  "triggers": { "crons": ["17 * * * *"] },
+
+  "vars": {
+    // Hard cap on all active transfers together. R2's free tier is 10 GB-month.
+    "MAX_TOTAL_BYTES": "9500000000",
+    "MAX_FILES": "200",
+    // Options shown in the "Delete after" dropdown, in days.
+    "EXPIRY_DAYS": "1,3,7,14,30",
+    "DEFAULT_EXPIRY_DAYS": "7"
+  },
+
+  // Secrets (set with `wrangler secret put`, see README):
+  //   UPLOAD_PASSWORD  shared passphrase for the upload page
+  //   SESSION_SECRET   random key used to sign login cookies
+
+  "observability": { "enabled": true }
+}

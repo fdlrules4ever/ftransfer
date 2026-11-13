@@ -1,0 +1,16 @@
+{
+  // Browser code. Compiled (not bundled) to plain ES modules in public/js.
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "rootDir": ".",
+    "outDir": "../public/js",
+    "skipLibCheck": true
+  },
+  "include": ["*.ts"]
+}
