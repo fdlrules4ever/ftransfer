@@ -9,6 +9,7 @@ import {
   isShareId,
   newShareId,
   parseDayList,
+  parseIntList,
   parseRange,
   partCount,
   safeContentType,
@@ -99,6 +100,12 @@ test("parseDayList", () => {
   assert.deepEqual(parseDayList("7, 1,30,7", [9]), [1, 7, 30]);
   assert.deepEqual(parseDayList("abc", [9]), [9]);
   assert.deepEqual(parseDayList(undefined, [9]), [9]);
+});
+
+test("parseIntList drops values above the maximum", () => {
+  assert.deepEqual(parseIntList("1,24,168,169,720", [24], 168), [1, 24, 168]);
+  assert.deepEqual(parseIntList("720", [24], 168), [24]);
+  assert.deepEqual(parseIntList("0,-1,1.5", [24], 168), [24]);
 });
 
 test("formatBytes", () => {

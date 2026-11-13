@@ -208,6 +208,52 @@ input:focus-visible, select:focus-visible { outline: 2px solid var(--lime); outl
 .options select { width: auto; height: 38px; padding: 0 10px; }
 .summary { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* Tabs (Files | Secret) */
+.tabs {
+  display: flex; gap: 4px; padding: 4px; margin: 0 0 20px;
+  border-radius: 14px; border: 1px solid var(--border); background: rgb(3 10 28 / 55%);
+}
+.tab {
+  appearance: none; flex: 1;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--muted);
+  font: inherit; font-weight: 650; cursor: pointer;
+  transition: background-color .15s, color .15s;
+}
+.tab:hover { color: var(--text); background: var(--surface-2); }
+.tab[aria-selected="true"] { color: var(--text); background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.tab[aria-selected="true"] svg { color: var(--lime); }
+
+/* Secret field: masked until "show" is pressed */
+.secret-box { position: relative; }
+.secret-text {
+  display: block; width: 100%; min-height: 160px; resize: vertical;
+  padding: 12px 52px 12px 14px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-strong);
+  background: rgb(3 10 28 / 55%); color: var(--text);
+  font: 14px/1.55 var(--mono); overflow-wrap: anywhere;
+}
+.secret-text::placeholder { color: var(--muted); opacity: .8; }
+.secret-text:focus-visible { outline: 2px solid var(--lime); outline-offset: 0; border-color: transparent; }
+.secret-text[readonly] { resize: none; min-height: 0; }
+.secret-text.masked { -webkit-text-security: disc; }
+/* Browsers that can't mask a textarea blur it instead (the placeholder stays readable). */
+@supports not (-webkit-text-security: disc) {
+  .secret-text.masked:not(:placeholder-shown) { filter: blur(6px); }
+}
+.reveal-toggle { position: absolute; top: 6px; right: 6px; }
+.reveal-toggle[aria-pressed="true"] { color: var(--lime); }
+.secret-under { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 8px 0 0; }
+.secret-under p { margin: 0; }
+.secret-under span { flex: none; }
+.options label.check { gap: 8px; cursor: pointer; }
+.reveal-hint { margin: 14px 0 0; }
+#reveal-error { margin: 14px 0 0; text-align: left; }
+#view-secret .secret-text { max-height: 360px; }
+.secret-note { margin: 14px 0 0; }
+input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var(--lime); cursor: pointer; }
+
 /* Done / states */
 .success-mark, .state-mark { width: 60px; height: 60px; border-radius: 18px; display: grid; place-items: center; margin-bottom: 18px; }
 .success-mark { background: var(--accent-grad); color: var(--on-accent); box-shadow: 0 10px 28px -10px rgb(185 244 58 / 70%); }

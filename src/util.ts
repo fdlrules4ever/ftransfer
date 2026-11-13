@@ -124,15 +124,24 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits)} ${units[unit]}`;
 }
 
-export function parseDayList(input: string | undefined, fallback: number[]): number[] {
-  const days = (input ?? "")
+/** Parses "7, 1,30" into sorted, unique whole numbers from 1 to `max`; falls back when none are valid. */
+export function parseIntList(input: string | undefined, fallback: number[], max: number): number[] {
+  const values = (input ?? "")
     .split(",")
     .map((s) => Number(s.trim()))
-    .filter((n) => Number.isInteger(n) && n > 0 && n <= 365);
-  return days.length > 0 ? [...new Set(days)].sort((a, b) => a - b) : fallback;
+    .filter((n) => Number.isInteger(n) && n > 0 && n <= max);
+  return values.length > 0 ? [...new Set(values)].sort((a, b) => a - b) : fallback;
+}
+
+export function parseDayList(input: string | undefined, fallback: number[]): number[] {
+  return parseIntList(input, fallback, 365);
 }
 
 export function parsePositiveInt(input: string | undefined, fallback: number): number {
   const n = Number(input);
   return Number.isSafeInteger(n) && n > 0 ? n : fallback;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -24,9 +24,11 @@ import {
   attachmentDisposition,
   expectedPartSize,
   formatBytes,
+  isRecord,
   isShareId,
   newShareId,
   parseDayList,
+  parseIntList,
   parsePositiveInt,
   parseRange,
   partCount,
@@ -51,23 +53,37 @@ export const CHUNK_SIZE = 32 * 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOT_FOUND = "This transfer doesn't exist, was deleted, or has expired.";
 
+/** Longest secret, in UTF-16 code units: what a textarea's maxlength and String#length count. */
+export const MAX_SECRET_CHARS = 10_000;
+
+/** Secrets live at most 7 days, which the 8-day R2 lifecycle rule on secrets/ relies on. */
+export const MAX_SECRET_EXPIRY_HOURS = 7 * 24;
+
 export interface Limits {
   chunkSize: number;
   maxTotalBytes: number;
   maxFiles: number;
   expiryDays: number[];
   defaultExpiryDays: number;
+  maxSecretChars: number;
+  secretExpiryHours: number[];
+  defaultSecretExpiryHours: number;
 }
 
 export function getLimits(env: Env): Limits {
   const expiryDays = parseDayList(env.EXPIRY_DAYS, [1, 3, 7, 14, 30]);
   const wanted = parsePositiveInt(env.DEFAULT_EXPIRY_DAYS, 7);
+  const secretHours = parseIntList(env.SECRET_EXPIRY_HOURS, [1, 24, 168], MAX_SECRET_EXPIRY_HOURS);
+  const wantedHours = parsePositiveInt(env.DEFAULT_SECRET_EXPIRY_HOURS, 24);
   return {
     chunkSize: CHUNK_SIZE,
     maxTotalBytes: parsePositiveInt(env.MAX_TOTAL_BYTES, 9_500_000_000),
     maxFiles: parsePositiveInt(env.MAX_FILES, 200),
     expiryDays,
     defaultExpiryDays: expiryDays.includes(wanted) ? wanted : expiryDays[0]!,
+    maxSecretChars: MAX_SECRET_CHARS,
+    secretExpiryHours: secretHours,
+    defaultSecretExpiryHours: secretHours.includes(wantedHours) ? wantedHours : secretHours[0]!,
   };
 }
 
@@ -82,7 +98,7 @@ async function isAuthenticated(c: Ctx): Promise<boolean> {
   return verifySessionToken(token, SESSION_SECRET, UPLOAD_PASSWORD, c.now);
 }
 
-async function requireAuth(c: Ctx): Promise<void> {
+export async function requireAuth(c: Ctx): Promise<void> {
   if (!(await isAuthenticated(c))) throw new HttpError(401, "Please sign in first.");
 }
 
@@ -368,8 +384,4 @@ export async function removeTransfer(c: Ctx, id: string): Promise<Response> {
   if (!manifest) throw new HttpError(404, NOT_FOUND);
   await deleteTransfer(c.env.BUCKET, id);
   return json({ ok: true });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

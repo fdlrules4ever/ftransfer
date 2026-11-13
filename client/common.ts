@@ -28,6 +28,10 @@ const ICONS = {
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
   alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:
+    '<path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-2.2 3.2"/><path d="M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><path d="m2 2 20 20"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -66,6 +70,33 @@ export function formatBytes(bytes: number): string {
 
 export function formatDate(ms: number): string {
   return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(ms);
+}
+
+/** Date and time, for expiries that can be an hour away. */
+export function formatDateTime(ms: number): string {
+  return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }).format(ms);
+}
+
+/** "1 hour", "12 hours", "1 day", "7 days". */
+export function formatHours(hours: number): string {
+  return hours % 24 === 0 ? plural(hours / 24, "day") : plural(hours, "hour");
+}
+
+/**
+ * Wires an eye button that shows or hides a field's text (the field gets the `masked` class).
+ * Returns a setter, e.g. to hide the text again after sending.
+ */
+export function maskToggle(button: HTMLButtonElement, field: HTMLElement): (masked: boolean) => void {
+  const set = (masked: boolean) => {
+    field.classList.toggle("masked", masked);
+    button.setAttribute("aria-pressed", String(!masked));
+    button.title = masked ? "Show" : "Hide";
+    button.replaceChildren(icon(masked ? "eye" : "eyeOff", 20));
+  };
+  button.setAttribute("aria-label", "Show secret");
+  button.addEventListener("click", () => set(!field.classList.contains("masked")));
+  set(true);
+  return set;
 }
 
 export function timeUntil(ms: number, now = Date.now()): string {

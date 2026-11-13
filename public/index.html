@@ -43,29 +43,67 @@
 
     <!-- Compose -->
     <section id="view-compose" class="card" hidden>
-      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-describedby="space-hint">
-        <span class="dz-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
-        </span>
-        <div class="dz-text">
-          <p id="dz-title" class="dz-title">Drop files here</p>
-          <p class="dz-sub">or <span class="link">browse your files</span></p>
-          <p id="space-hint" class="muted small dz-hint"></p>
+      <div class="tabs" role="tablist" aria-label="What to share">
+        <button id="tab-files" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-files">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/></svg>
+          Files
+        </button>
+        <button id="tab-secret" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-secret" tabindex="-1">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          Secret
+        </button>
+      </div>
+
+      <div id="panel-files" role="tabpanel" aria-labelledby="tab-files">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-describedby="space-hint">
+          <span class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="m6 10 6-6 6 6"/><path d="M4 20h16"/></svg>
+          </span>
+          <div class="dz-text">
+            <p id="dz-title" class="dz-title">Drop files here</p>
+            <p class="dz-sub">or <span class="link">browse your files</span></p>
+            <p id="space-hint" class="muted small dz-hint"></p>
+          </div>
         </div>
+        <input id="file-input" type="file" multiple hidden>
+
+        <ul id="file-list" class="file-list" aria-label="Selected files"></ul>
+
+        <div class="options">
+          <label for="expiry">Delete after
+            <select id="expiry"></select>
+          </label>
+          <span id="summary" class="summary"></span>
+        </div>
+
+        <p id="compose-error" class="error" role="alert" hidden></p>
+        <button id="share-btn" class="btn primary large" type="button" disabled>Share</button>
       </div>
-      <input id="file-input" type="file" multiple hidden>
 
-      <ul id="file-list" class="file-list" aria-label="Selected files"></ul>
+      <div id="panel-secret" role="tabpanel" aria-labelledby="tab-secret" hidden>
+        <label for="secret-input">Secret</label>
+        <div class="secret-box">
+          <textarea id="secret-input" class="secret-text masked" rows="7" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="Paste a password, API key or private note" aria-describedby="secret-hint"></textarea>
+          <button id="secret-toggle" class="btn ghost icon-btn reveal-toggle" type="button" aria-controls="secret-input"></button>
+        </div>
+        <div class="secret-under">
+          <p id="secret-hint" class="muted small">Encrypted in your browser before it's sent. Only someone with the link can read it.</p>
+          <span id="secret-count" class="muted small tabular"></span>
+        </div>
 
-      <div class="options">
-        <label for="expiry">Delete after
-          <select id="expiry"></select>
-        </label>
-        <span id="summary" class="summary"></span>
+        <div class="options">
+          <label for="secret-expiry">Delete after
+            <select id="secret-expiry"></select>
+          </label>
+          <label class="check" for="secret-once">
+            <input id="secret-once" type="checkbox" checked>
+            Delete after first view
+          </label>
+        </div>
+
+        <p id="secret-error" class="error" role="alert" hidden></p>
+        <button id="secret-share-btn" class="btn primary large" type="button" disabled>Share secret</button>
       </div>
-
-      <p id="compose-error" class="error" role="alert" hidden></p>
-      <button id="share-btn" class="btn primary large" type="button" disabled>Share</button>
     </section>
 
     <!-- Uploading -->
@@ -102,7 +140,7 @@
         <input id="share-url" type="text" readonly spellcheck="false">
         <button id="copy-btn" class="btn primary" type="button">Copy link</button>
       </div>
-      <p class="muted small">Anyone with this link can download and delete these files.</p>
+      <p id="done-note" class="muted small">Anyone with this link can download and delete these files.</p>
       <div class="actions">
         <a id="open-link" class="btn" href="/" target="_blank" rel="noopener noreferrer">Open download page</a>
         <button id="new-btn" class="btn ghost" type="button">Send more files</button>

@@ -1,6 +1,7 @@
 // R2 layout
 //   manifests/{shareId}.json   transfer metadata (custom metadata mirrors status/expiry/size for cheap listing)
 //   files/{shareId}/{index}    the uploaded files
+//   secrets/{secretId}.json    an end-to-end encrypted secret (custom metadata mirrors expiry for cheap listing)
 
 export type TransferStatus = "uploading" | "ready";
 
@@ -125,5 +126,102 @@ export async function cleanupExpired(
     await deleteTransfer(bucket, m.id);
     deleted.push(m.id);
   }
+  return { deleted, remaining: false };
+}
+
+// ---------------------------------------------------------------------------
+// Secrets
+
+/**
+ * A secret as stored in R2. The browser encrypts it (AES-256-GCM) and keeps the key in the
+ * link's #fragment, so this record only ever holds ciphertext the Worker can't read.
+ */
+export interface SecretRecord {
+  v: 1;
+  id: string;
+  createdAt: number; // epoch ms
+  expiresAt: number; // epoch ms
+  /** Deleted as soon as someone reveals it. */
+  oneTime: boolean;
+  iv: string; // base64url, 12 bytes
+  ciphertext: string; // base64url, includes the 16-byte GCM tag
+}
+
+const SECRET_PREFIX = "secrets/";
+
+export const secretKey = (id: string) => `${SECRET_PREFIX}${id}.json`;
+
+/** Missing or unparseable expiry counts as expired, so leftovers never live forever. */
+export function isSecretExpired(expiresAt: number, now: number): boolean {
+  return !(expiresAt > now);
+}
+
+export async function writeSecret(bucket: R2Bucket, s: SecretRecord): Promise<void> {
+  await bucket.put(secretKey(s.id), JSON.stringify(s), {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: { expiresAt: String(s.expiresAt), oneTime: s.oneTime ? "1" : "0" },
+  });
+}
+
+/** Reads only the metadata (no ciphertext). Null if missing or expired. */
+export async function headSecret(
+  bucket: R2Bucket,
+  id: string,
+  now: number,
+): Promise<{ expiresAt: number; oneTime: boolean } | null> {
+  const head = await bucket.head(secretKey(id));
+  if (!head) return null;
+  const expiresAt = Number(head.customMetadata?.expiresAt);
+  if (isSecretExpired(expiresAt, now)) return null;
+  return { expiresAt, oneTime: head.customMetadata?.oneTime === "1" };
+}
+
+/**
+ * Returns the secret, or null if it's missing or expired. A one-time secret is claimed and
+ * deleted before it is returned: the claim is a conditional write on the object's etag, so when
+ * two requests race for the same secret only one of them gets it.
+ */
+export async function takeSecret(bucket: R2Bucket, id: string, now: number): Promise<SecretRecord | null> {
+  const key = secretKey(id);
+  const obj = await bucket.get(key);
+  if (!obj) return null;
+  if (isSecretExpired(Number(obj.customMetadata?.expiresAt), now)) {
+    await obj.text(); // drain the body before the next call
+    await bucket.delete(key);
+    return null;
+  }
+  const record = await obj.json<SecretRecord>();
+  if (!record.oneTime) return record;
+
+  // Overwrite this exact version with an already-expired tombstone. If someone else got here
+  // first, the etag no longer matches and the put returns null.
+  const claimed = await bucket.put(key, "", {
+    onlyIf: { etagMatches: obj.etag },
+    customMetadata: { expiresAt: "0", oneTime: "1" },
+  });
+  if (!claimed) return null;
+  await bucket.delete(key); // if this fails, the tombstone is expired and the cleanup job removes it
+  return record;
+}
+
+/** Deletes expired secrets (and tombstones) in batches. Leftovers are picked up by the next run. */
+export async function cleanupExpiredSecrets(
+  bucket: R2Bucket,
+  now: number,
+  maxDeletes = 1000,
+): Promise<{ deleted: number; remaining: boolean }> {
+  let deleted = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await bucket.list({ prefix: SECRET_PREFIX, include: ["customMetadata"], cursor });
+    const expired = page.objects
+      .filter((o) => isSecretExpired(Number(o.customMetadata?.expiresAt), now))
+      .map((o) => o.key);
+    const batch = expired.slice(0, maxDeletes - deleted);
+    if (batch.length > 0) await bucket.delete(batch);
+    deleted += batch.length;
+    if (batch.length < expired.length) return { deleted, remaining: true };
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
   return { deleted, remaining: false };
 }

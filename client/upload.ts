@@ -6,11 +6,15 @@ import {
   fileBadge,
   formatBytes,
   formatDate,
+  formatDateTime,
   formatDuration,
+  formatHours,
   h,
   icon,
+  maskToggle,
   plural,
 } from "./common.js";
+import { encryptSecret } from "./crypto.js";
 
 // ---------------------------------------------------------------------------
 // Types shared with the API
@@ -21,6 +25,9 @@ interface Limits {
   maxFiles: number;
   expiryDays: number[];
   defaultExpiryDays: number;
+  maxSecretChars: number;
+  secretExpiryHours: number[];
+  defaultSecretExpiryHours: number;
 }
 
 interface Session {
@@ -49,6 +56,12 @@ interface Finalized {
   expiresAt: number;
   totalBytes: number;
   files: { index: number; name: string; size: number }[];
+}
+
+interface CreatedSecret {
+  id: string;
+  expiresAt: number;
+  oneTime: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +134,42 @@ $<HTMLFormElement>("login-form").addEventListener("submit", async (e) => {
 $("signout").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" }).catch(() => undefined);
   selected = [];
+  clearSecret();
   await init();
+});
+
+// ---------------------------------------------------------------------------
+// Tabs: Files | Secret
+
+type Tab = "files" | "secret";
+const tabs: Record<Tab, { tab: HTMLButtonElement; panel: HTMLElement }> = {
+  files: { tab: $<HTMLButtonElement>("tab-files"), panel: $("panel-files") },
+  secret: { tab: $<HTMLButtonElement>("tab-secret"), panel: $("panel-secret") },
+};
+let activeTab: Tab = "files";
+
+function selectTab(tab: Tab, focusTab = false): void {
+  activeTab = tab;
+  for (const [name, { tab: button, panel }] of Object.entries(tabs) as [Tab, (typeof tabs)[Tab]][]) {
+    const active = name === tab;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    panel.hidden = !active;
+  }
+  if (focusTab) tabs[tab].tab.focus();
+}
+
+tabs.files.tab.addEventListener("click", () => selectTab("files"));
+tabs.secret.tab.addEventListener("click", () => {
+  selectTab("secret");
+  secretInput.focus();
+});
+// Arrow keys move between tabs (WAI-ARIA tabs pattern).
+$("tab-files").parentElement!.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+  e.preventDefault();
+  const next: Tab = e.key === "Home" ? "files" : e.key === "End" ? "secret" : activeTab === "files" ? "secret" : "files";
+  selectTab(next, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -142,6 +190,7 @@ function setupCompose(): void {
     }),
   );
   renderSelected();
+  setupSecret();
 }
 
 function totalSelected(): number {
@@ -208,27 +257,33 @@ fileInput.addEventListener("change", () => {
   fileInput.value = "";
 });
 
-// Accept drops anywhere on the page while composing.
+// Accept file drops anywhere on the page while composing. Dragged text is left alone,
+// so it can still be dropped into the secret field.
 let dragDepth = 0;
 const canDrop = () => !views.compose.hidden;
+const isFileDrag = (e: DragEvent) => e.dataTransfer?.types.includes("Files") ?? false;
 window.addEventListener("dragenter", (e) => {
-  if (!canDrop() || !e.dataTransfer?.types.includes("Files")) return;
+  if (!canDrop() || !isFileDrag(e)) return;
   e.preventDefault();
+  if (activeTab !== "files") selectTab("files");
   dragDepth++;
   dropzone.classList.add("dragging");
 });
 window.addEventListener("dragover", (e) => {
-  if (!canDrop()) return;
+  if (!isFileDrag(e)) return;
+  // Always cancel file drags, so a stray drop never makes the browser open the file instead.
   e.preventDefault();
-  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  if (e.dataTransfer) e.dataTransfer.dropEffect = canDrop() ? "copy" : "none";
 });
-window.addEventListener("dragleave", () => {
+window.addEventListener("dragleave", (e) => {
+  if (!isFileDrag(e)) return;
   if (--dragDepth <= 0) {
     dragDepth = 0;
     dropzone.classList.remove("dragging");
   }
 });
 window.addEventListener("drop", (e) => {
+  if (!isFileDrag(e)) return;
   e.preventDefault();
   dragDepth = 0;
   dropzone.classList.remove("dragging");
@@ -257,6 +312,102 @@ window.addEventListener("drop", (e) => {
 });
 
 $("share-btn").addEventListener("click", () => void startUpload());
+
+// ---------------------------------------------------------------------------
+// Compose: secret
+
+const secretInput = $<HTMLTextAreaElement>("secret-input");
+const secretExpiry = $<HTMLSelectElement>("secret-expiry");
+const secretOnce = $<HTMLInputElement>("secret-once");
+const secretShareBtn = $<HTMLButtonElement>("secret-share-btn");
+const setSecretMasked = maskToggle($<HTMLButtonElement>("secret-toggle"), secretInput);
+let sharingSecret = false;
+
+function setupSecret(): void {
+  const limits = session.limits!;
+  const current = Number(secretExpiry.value) || limits.defaultSecretExpiryHours;
+  const chosen = limits.secretExpiryHours.includes(current) ? current : limits.defaultSecretExpiryHours;
+  secretExpiry.replaceChildren(
+    ...limits.secretExpiryHours.map((hours) => {
+      const opt = h("option", { value: String(hours) }, formatHours(hours));
+      opt.selected = hours === chosen;
+      return opt;
+    }),
+  );
+  secretInput.maxLength = limits.maxSecretChars;
+  renderSecret();
+}
+
+function renderSecret(): void {
+  const max = session.limits?.maxSecretChars ?? 0;
+  const length = secretInput.value.length;
+  // Only worth showing once it starts to matter.
+  $("secret-count").textContent = length > max * 0.8 ? `${length.toLocaleString()} / ${max.toLocaleString()}` : "";
+  secretShareBtn.disabled = sharingSecret || secretInput.value.trim() === "" || length > max;
+}
+
+function clearSecret(): void {
+  secretInput.value = "";
+  setSecretMasked(true);
+  showError($("secret-error"), null);
+  renderSecret();
+}
+
+secretInput.addEventListener("input", () => {
+  showError($("secret-error"), null);
+  renderSecret();
+});
+
+async function shareSecret(): Promise<void> {
+  const text = secretInput.value;
+  if (text.trim() === "" || sharingSecret) return;
+  sharingSecret = true;
+  showError($("secret-error"), null);
+  secretShareBtn.textContent = "Encrypting…";
+  renderSecret();
+  try {
+    const encrypted = await encryptSecret(text);
+    const created = await api<CreatedSecret>("/api/secrets", {
+      method: "POST",
+      body: JSON.stringify({
+        iv: encrypted.iv,
+        ciphertext: encrypted.ciphertext,
+        expiryHours: Number(secretExpiry.value),
+        oneTime: secretOnce.checked,
+      }),
+    });
+    clearSecret();
+    // The key goes after the #: browsers never send that part to the server.
+    const url = `${location.origin}/s/${created.id}#${encrypted.key}`;
+    showDone({
+      url,
+      meta: created.oneTime
+        ? `Secret · deleted after the first view, or on ${formatDateTime(created.expiresAt)}`
+        : `Secret · deleted automatically on ${formatDateTime(created.expiresAt)}`,
+      note: created.oneTime
+        ? "Anyone with this link can view this secret once. After that, the link stops working."
+        : "Anyone with this link can view and delete this secret until it expires.",
+      // Opening a one-time secret yourself would use it up, so don't offer it.
+      openLabel: created.oneTime ? null : "Open secret page",
+      newLabel: "Share another secret",
+    });
+  } catch (err) {
+    showError($("secret-error"), `Couldn't share the secret: ${errorMessage(err)}`);
+  } finally {
+    sharingSecret = false;
+    secretShareBtn.textContent = "Share secret";
+    renderSecret();
+  }
+}
+
+secretShareBtn.addEventListener("click", () => void shareSecret());
+// Ctrl/Cmd+Enter shares from inside the field.
+secretInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    void shareSecret();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Upload engine: parallel, chunked, with retries
@@ -537,7 +688,7 @@ async function startUpload(): Promise<void> {
     $("overall-detail").textContent = "Finishing…";
     const result = await withRetry(job, () => api<Finalized>(`/api/transfers/${transfer.id}/finalize`, { method: "POST" }));
     uploading = false;
-    showDone(result);
+    showFilesDone(result);
   } catch (err) {
     stopJob(job);
     uploading = false;
@@ -578,12 +729,35 @@ window.addEventListener("beforeunload", (e) => {
 // ---------------------------------------------------------------------------
 // Done
 
-function showDone(result: Finalized): void {
-  const url = `${location.origin}/${result.id}`;
+interface DoneInfo {
+  url: string;
+  meta: string;
+  note: string;
+  /** Label for the "open" button, or null to hide it. */
+  openLabel: string | null;
+  newLabel: string;
+}
+
+function showFilesDone(result: Finalized): void {
+  showDone({
+    url: `${location.origin}/${result.id}`,
+    meta: `${plural(result.files.length, "file")} · ${formatBytes(result.totalBytes)} · deleted automatically on ${formatDate(result.expiresAt)}`,
+    note: "Anyone with this link can download and delete these files.",
+    openLabel: "Open download page",
+    newLabel: "Send more files",
+  });
+}
+
+function showDone(info: DoneInfo): void {
   const input = $<HTMLInputElement>("share-url");
-  input.value = url;
-  $<HTMLAnchorElement>("open-link").href = url;
-  $("done-meta").textContent = `${plural(result.files.length, "file")} · ${formatBytes(result.totalBytes)} · deleted automatically on ${formatDate(result.expiresAt)}`;
+  input.value = info.url;
+  const open = $<HTMLAnchorElement>("open-link");
+  open.href = info.openLabel ? info.url : "/";
+  open.textContent = info.openLabel ?? "";
+  open.hidden = info.openLabel === null;
+  $("done-meta").textContent = info.meta;
+  $("done-note").textContent = info.note;
+  $("new-btn").textContent = info.newLabel;
   resetCopyButton();
   show("done");
   input.focus();
@@ -609,10 +783,13 @@ copyBtn.addEventListener("click", async () => {
 
 $("share-url").addEventListener("focus", (e) => (e.target as HTMLInputElement).select());
 
+// Back to whichever tab was used, ready for the next one.
 $("new-btn").addEventListener("click", async () => {
   selected = [];
+  clearSecret();
   await refreshUsage();
   show("compose");
+  if (activeTab === "secret") secretInput.focus();
 });
 
 async function refreshUsage(): Promise<void> {

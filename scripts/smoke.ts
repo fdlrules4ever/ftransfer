@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { decryptSecret, encryptSecret } from "../client/crypto.ts";
 
 const BASE = (process.env.BASE_URL ?? "http://localhost:8787").replace(/\/$/, "");
 const PASSWORD = process.env.UPLOAD_PASSWORD ?? readDevVar("UPLOAD_PASSWORD");
@@ -68,6 +69,12 @@ await step("anonymous session is not authenticated", async () => {
 
 await step("uploading without login is refused", async () => {
   const res = await req("POST", "/api/transfers", { files: [{ name: "a", size: 1 }] });
+  assert.equal(res.status, 401);
+});
+
+await step("creating a secret without login is refused", async () => {
+  const enc = await encryptSecret("nope");
+  const res = await req("POST", "/api/secrets", { iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 24, oneTime: true });
   assert.equal(res.status, 401);
 });
 
@@ -176,7 +183,117 @@ await step("finalize makes the transfer downloadable", async () => {
   assert.ok(Math.abs(data.expiresAt - (Date.now() + day)) < 60_000);
 });
 
+// --- Secrets (sender side) ---
+
+type SecretLimits = { maxSecretChars: number; secretExpiryHours: number[]; defaultSecretExpiryHours: number };
+const secretLimits = limits as unknown as SecretLimits;
+const SECRET_TEXT = "pässwörd 🔑\n  line two  ";
+type Encrypted = Awaited<ReturnType<typeof encryptSecret>>;
+const secrets: Record<"once" | "race" | "multi", { id: string; enc: Encrypted }> = {} as never;
+
+await step("session reports secret limits", async () => {
+  assert.equal(secretLimits.maxSecretChars, 10_000);
+  assert.ok(secretLimits.secretExpiryHours.includes(secretLimits.defaultSecretExpiryHours));
+  assert.ok(Math.max(...secretLimits.secretExpiryHours) <= 168);
+});
+
+await step("invalid secrets are refused", async () => {
+  const enc = await encryptSecret("x");
+  const bad = [
+    { body: { iv: "short", ciphertext: enc.ciphertext, expiryHours: 24, oneTime: true }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: "", expiryHours: 24, oneTime: true }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 5, oneTime: true }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 24, oneTime: "yes" }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: randomBytes(30_017).toString("base64url"), expiryHours: 24, oneTime: true }, status: 413 },
+  ];
+  for (const { body, status } of bad) {
+    const res = await req("POST", "/api/secrets", body);
+    assert.equal(res.status, status, `${JSON.stringify(body).slice(0, 80)} → ${await res.clone().text()}`);
+  }
+});
+
+await step("a secret of the maximum length is accepted", async () => {
+  const enc = await encryptSecret("€".repeat(secretLimits.maxSecretChars)); // 3 UTF-8 bytes each: the worst case
+  const res = await req("POST", "/api/secrets", { iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 1, oneTime: true });
+  assert.equal(res.status, 201, await res.clone().text());
+  const { id: maxId } = (await res.json()) as { id: string };
+  assert.equal((await req("DELETE", `/api/secrets/${maxId}`)).status, 200);
+});
+
+await step("create one-time and reusable secrets", async () => {
+  for (const [name, oneTime] of [["once", true], ["race", true], ["multi", false]] as const) {
+    const enc = await encryptSecret(SECRET_TEXT);
+    const res = await req("POST", "/api/secrets", { iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 1, oneTime });
+    assert.equal(res.status, 201, await res.clone().text());
+    const data = (await res.json()) as { id: string; expiresAt: number; oneTime: boolean };
+    assert.match(data.id, /^[A-Za-z0-9_-]{22}$/);
+    assert.equal(data.oneTime, oneTime);
+    assert.ok(Math.abs(data.expiresAt - (Date.now() + 3600_000)) < 60_000);
+    secrets[name] = { id: data.id, enc };
+  }
+});
+
 cookie = ""; // everything below is what a recipient (no login) can do
+
+await step("secret page is public and doesn't contain the secret", async () => {
+  const page = await req("GET", `/s/${secrets.once.id}`);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Reveal secret/);
+  assert.ok(!html.includes(secrets.once.enc.ciphertext));
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+});
+
+await step("secret info doesn't use it up", async () => {
+  for (let i = 0; i < 2; i++) {
+    const res = await req("GET", `/api/secrets/${secrets.once.id}`);
+    assert.equal(res.status, 200);
+    const data = (await res.json()) as Record<string, unknown>;
+    assert.equal(data.oneTime, true);
+    assert.equal(data.ciphertext, undefined);
+  }
+});
+
+await step("reveal is refused cross-origin", async () => {
+  const res = await req("POST", `/api/secrets/${secrets.once.id}/reveal`, undefined, { Origin: "https://evil.example" });
+  assert.equal(res.status, 403);
+});
+
+await step("one-time secret: revealed and decrypted once, then gone", async () => {
+  const res = await req("POST", `/api/secrets/${secrets.once.id}/reveal`);
+  assert.equal(res.status, 200, await res.clone().text());
+  const data = (await res.json()) as { iv: string; ciphertext: string };
+  assert.equal(await decryptSecret({ key: secrets.once.enc.key, ...data }), SECRET_TEXT);
+  assert.equal((await req("POST", `/api/secrets/${secrets.once.id}/reveal`)).status, 404);
+  assert.equal((await req("GET", `/api/secrets/${secrets.once.id}`)).status, 404);
+});
+
+await step("one-time secret: only one of several simultaneous reveals succeeds", async () => {
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () => req("POST", `/api/secrets/${secrets.race.id}/reveal`).then((r) => r.status)),
+  );
+  assert.deepEqual(results.sort(), [200, 404, 404, 404, 404]);
+});
+
+await step("reusable secret: revealed twice, then deleted by the recipient", async () => {
+  for (let i = 0; i < 2; i++) {
+    const res = await req("POST", `/api/secrets/${secrets.multi.id}/reveal`);
+    assert.equal(res.status, 200);
+    const data = (await res.json()) as { iv: string; ciphertext: string };
+    assert.equal(await decryptSecret({ key: secrets.multi.enc.key, ...data }), SECRET_TEXT);
+  }
+  assert.equal((await req("DELETE", `/api/secrets/${secrets.multi.id}`)).status, 200);
+  assert.equal((await req("POST", `/api/secrets/${secrets.multi.id}/reveal`)).status, 404);
+  assert.equal((await req("DELETE", `/api/secrets/${secrets.multi.id}`)).status, 404);
+});
+
+await step("a guessed secret id is not found", async () => {
+  assert.equal((await req("GET", `/api/secrets/${"A".repeat(22)}`)).status, 404);
+  assert.equal((await req("POST", `/api/secrets/${"A".repeat(22)}/reveal`)).status, 404);
+  assert.equal((await req("GET", "/s/not-an-id")).status, 404);
+});
+
+// --- Files (recipient side) ---
 
 await step("share page and metadata are public with the link", async () => {
   const page = await req("GET", `/${id}`);

@@ -1,5 +1,6 @@
 import { assertSameOrigin, errorJson, HttpError, withSecurityHeaders } from "./http.ts";
-import { cleanupExpired } from "./storage.ts";
+import { createSecret, getSecretInfo, removeSecret, revealSecret } from "./secrets.ts";
+import { cleanupExpired, cleanupExpiredSecrets } from "./storage.ts";
 import {
   completeMultipart,
   createTransfer,
@@ -36,8 +37,22 @@ export default {
   },
 
   async scheduled(_controller, env): Promise<void> {
-    const { deleted, remaining } = await cleanupExpired(env.BUCKET, Date.now());
-    console.log(JSON.stringify({ event: "cleanup", deleted: deleted.length, remaining }));
+    const now = Date.now();
+    // Independent jobs: a failure in one shouldn't stop the other.
+    const [transfers, secrets] = await Promise.allSettled([
+      cleanupExpired(env.BUCKET, now),
+      cleanupExpiredSecrets(env.BUCKET, now),
+    ]);
+    console.log(
+      JSON.stringify({
+        event: "cleanup",
+        transfers:
+          transfers.status === "fulfilled"
+            ? { deleted: transfers.value.deleted.length, remaining: transfers.value.remaining }
+            : { error: String(transfers.reason) },
+        secrets: secrets.status === "fulfilled" ? secrets.value : { error: String(secrets.reason) },
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;
 
@@ -78,6 +93,15 @@ async function routeApi(c: Ctx): Promise<Response> {
       return putPart(c, id, index, part);
     case "POST transfers/:/files/:/complete":
       return completeMultipart(c, id, index);
+
+    case "POST secrets":
+      return createSecret(c);
+    case "GET secrets/:":
+      return getSecretInfo(c, id);
+    case "POST secrets/:/reveal":
+      return revealSecret(c, id);
+    case "DELETE secrets/:":
+      return removeSecret(c, id);
   }
   throw new HttpError(404, "Not found.");
 }
@@ -91,6 +115,8 @@ async function routePage(c: Ctx): Promise<Response> {
   const path = url.pathname;
   if (path === "/") return page(c, "/index.html", 200);
   if (isShareId(path.slice(1))) return page(c, "/share.html", 200);
+  // The decryption key follows in the #fragment, which browsers never send to the server.
+  if (path.startsWith("/s/") && isShareId(path.slice(3))) return page(c, "/secret.html", 200);
 
   const asset = await env.ASSETS.fetch(request);
   if (asset.status === 404) return page(c, "/404.html", 404);

@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cleanupExpired, isExpired, UPLOAD_WINDOW_MS, type ManifestSummary } from "../src/storage.ts";
+import {
+  cleanupExpired,
+  cleanupExpiredSecrets,
+  isExpired,
+  isSecretExpired,
+  secretKey,
+  takeSecret,
+  UPLOAD_WINDOW_MS,
+  writeSecret,
+  type ManifestSummary,
+  type SecretRecord,
+} from "../src/storage.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 10, 13, 12);
@@ -58,4 +69,88 @@ test("cleanup respects its per-run budget", async () => {
   assert.equal(result.deleted.length, 3);
   assert.equal(result.remaining, true);
   assert.equal(objects.size, 2);
+});
+
+// ---------------------------------------------------------------------------
+// Secrets
+
+test("secret expiry treats missing or unparseable dates as expired", () => {
+  assert.equal(isSecretExpired(NOW + 1, NOW), false);
+  assert.equal(isSecretExpired(NOW, NOW), true);
+  assert.equal(isSecretExpired(Number(undefined), NOW), true);
+  assert.equal(isSecretExpired(Number("0"), NOW), true);
+});
+
+test("secret cleanup deletes expired secrets and tombstones only", async () => {
+  const objects = new Map<string, Record<string, string>>([
+    ["secrets/live.json", { expiresAt: String(NOW + 60_000), oneTime: "1" }],
+    ["secrets/old.json", { expiresAt: String(NOW - 1), oneTime: "0" }],
+    ["secrets/tombstone.json", { expiresAt: "0", oneTime: "1" }],
+    ["secrets/nometa.json", {}],
+    ["manifests/unrelated.json", { status: "ready", createdAt: "1", expiresAt: "2", totalBytes: "1" }],
+  ]);
+  const result = await cleanupExpiredSecrets(fakeBucket(objects), NOW);
+  assert.deepEqual(result, { deleted: 3, remaining: false });
+  assert.deepEqual([...objects.keys()].sort(), ["manifests/unrelated.json", "secrets/live.json"]);
+});
+
+test("secret cleanup respects its per-run budget", async () => {
+  const objects = new Map<string, Record<string, string>>();
+  for (let i = 0; i < 5; i++) objects.set(`secrets/s${i}.json`, { expiresAt: "1" });
+  const result = await cleanupExpiredSecrets(fakeBucket(objects), NOW, 2);
+  assert.deepEqual(result, { deleted: 2, remaining: true });
+  assert.equal(objects.size, 3);
+});
+
+/** Just enough of R2Bucket for get / conditional put / delete, with etags that change on every write. */
+function fakeSecretBucket() {
+  const store = new Map<string, { body: string; etag: string; meta: Record<string, string> }>();
+  let version = 0;
+  const bucket = {
+    async get(key: string) {
+      const o = store.get(key);
+      if (!o) return null;
+      return { etag: o.etag, customMetadata: o.meta, json: async () => JSON.parse(o.body), text: async () => o.body };
+    },
+    async put(key: string, body: string, opts: { onlyIf?: { etagMatches?: string }; customMetadata?: Record<string, string> } = {}) {
+      const current = store.get(key);
+      if (opts.onlyIf?.etagMatches !== undefined && current?.etag !== opts.onlyIf.etagMatches) return null;
+      store.set(key, { body, etag: `v${++version}`, meta: opts.customMetadata ?? {} });
+      return { key };
+    },
+    async delete(key: string) {
+      store.delete(key);
+    },
+  };
+  return { store, bucket: bucket as unknown as R2Bucket };
+}
+
+const secret = (id: string, oneTime: boolean, expiresAt = NOW + 60_000): SecretRecord => ({
+  v: 1,
+  id,
+  createdAt: NOW,
+  expiresAt,
+  oneTime,
+  iv: "iv",
+  ciphertext: "ct",
+});
+
+test("a one-time secret is handed out once, even when two requests race for it", async () => {
+  const { store, bucket } = fakeSecretBucket();
+  await writeSecret(bucket, secret("once", true));
+  const results = await Promise.all([takeSecret(bucket, "once", NOW), takeSecret(bucket, "once", NOW)]);
+  assert.equal(results.filter((r) => r !== null).length, 1);
+  assert.equal(store.has(secretKey("once")), false);
+  assert.equal(await takeSecret(bucket, "once", NOW), null);
+});
+
+test("a reusable secret can be revealed repeatedly; expired secrets are removed", async () => {
+  const { store, bucket } = fakeSecretBucket();
+  await writeSecret(bucket, secret("multi", false));
+  assert.equal((await takeSecret(bucket, "multi", NOW))?.id, "multi");
+  assert.equal((await takeSecret(bucket, "multi", NOW))?.id, "multi");
+
+  await writeSecret(bucket, secret("stale", false, NOW - 1));
+  assert.equal(await takeSecret(bucket, "stale", NOW), null);
+  assert.equal(store.has(secretKey("stale")), false);
 });
