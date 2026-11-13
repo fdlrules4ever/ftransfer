@@ -1,1 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="9" fill="#4f46e5"/><path d="M16 23V9m-7 7 7-7 7 7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1f4d"/>
+      <stop offset="1" stop-color="#0d5566"/>
+    </linearGradient>
+    <linearGradient id="fg" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#2fe0a0"/>
+      <stop offset=".6" stop-color="#b9f43a"/>
+      <stop offset="1" stop-color="#ffe54d"/>
+    </linearGradient>
+    <linearGradient id="streak" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2fe0a0" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2fe0a0" stop-opacity=".9"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#bg)"/>
+  <path d="M40 64 64 34v14L52 64z" fill="#b9f43a" opacity=".12"/>
+  <g transform="skewX(-12) translate(7 0)">
+    <!-- speed lines -->
+    <rect x="6" y="17" width="12" height="4" rx="2" fill="url(#streak)"/>
+    <rect x="9" y="39" width="9" height="4" rx="2" fill="url(#streak)"/>
+    <rect x="3" y="45" width="15" height="4" rx="2" fill="url(#streak)"/>
+    <!-- shared top bar ending in an arrow -->
+    <path d="M21 16h27v-5l10 9-10 9v-5H21z" fill="url(#fg)"/>
+    <!-- F stem + middle bar -->
+    <rect x="21" y="16" width="7" height="33" rx="1.5" fill="url(#fg)"/>
+    <rect x="21" y="31" width="13" height="6" rx="1.5" fill="url(#fg)"/>
+    <!-- T stem -->
+    <rect x="37" y="22" width="7" height="27" rx="1.5" fill="url(#fg)"/>
+  </g>
+</svg>

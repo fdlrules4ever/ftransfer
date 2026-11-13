@@ -172,8 +172,8 @@ function renderSelected(): void {
   );
 
   const hasFiles = selected.length > 0;
-  dropzone.classList.toggle("compact", hasFiles);
-  $("dz-title").textContent = hasFiles ? "Add more files" : "Drop files here";
+  // The drop zone keeps its size; only the wording changes once files are added.
+  $("dz-title").textContent = hasFiles ? "Drop more files here" : "Drop files here";
   $("space-hint").textContent = `Up to ${formatBytes(free)} available`;
   $("summary").textContent = hasFiles ? `${plural(selected.length, "file")} · ${formatBytes(total)}` : "";
 
