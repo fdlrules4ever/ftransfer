@@ -4,6 +4,7 @@
   "private": true,
   "description": "Private file transfer on Cloudflare Workers + R2",
   "type": "module",
+  "packageManager": "pnpm@11.18.0",
   "scripts": {
     "dev": "wrangler dev",
     "build:client": "tsc -p client",
