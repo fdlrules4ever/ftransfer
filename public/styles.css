@@ -247,6 +247,40 @@ input:focus-visible, select:focus-visible { outline: 2px solid var(--lime); outl
 .secret-under { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 8px 0 0; }
 .secret-under p { margin: 0; }
 .secret-under span { flex: none; }
+
+/* Links: same field as a secret, but never masked */
+.secret-text.links-text { min-height: 112px; padding-right: 14px; }
+.link-list { list-style: none; margin: 12px 0 0; padding: 0; max-height: 420px; overflow-y: auto; }
+.link-list:empty { display: none; }
+.link-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+.link-row:last-child { border-bottom: 0; }
+.link-icon {
+  flex: none; width: 34px; height: 34px; border-radius: 10px; margin-top: 1px;
+  display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--lime);
+}
+.link-row.warn .link-icon { color: var(--yellow); background: rgb(255 229 77 / 8%); border-color: rgb(255 229 77 / 30%); }
+.link-row.rejected .link-icon { color: var(--muted); }
+.link-main { flex: 1; min-width: 0; }
+.link-open { display: block; color: inherit; text-decoration: none; border-radius: 8px; }
+.link-open:hover .link-host, .link-open:focus-visible .link-host { color: var(--lime); text-decoration: underline; text-underline-offset: 3px; }
+.link-host { font-weight: 650; overflow-wrap: anywhere; }
+/* Long addresses (signed URLs and the like) are cut off after three lines; the full one is in the tooltip. */
+.link-href {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  font: 13px/1.45 var(--mono); color: var(--muted); overflow-wrap: anywhere;
+}
+.link-row.rejected .link-href { color: var(--text); opacity: .7; }
+.link-reason, .link-looks { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.link-looks bdi { font-family: var(--mono); color: var(--text); }
+.link-warnings { list-style: none; margin: 6px 0 0; padding: 0; }
+.link-warnings li {
+  font-size: 13px; line-height: 1.45; color: #fff3b8; margin-top: 4px; padding: 6px 10px;
+  background: rgb(255 229 77 / 8%); border: 1px solid rgb(255 229 77 / 22%); border-radius: 8px;
+}
+.link-row > .btn { margin-top: -1px; }
+#view-links .link-list { margin: 12px 0 18px; max-height: none; }
+.links-note { margin: 12px 0 0; }
 .options label.check { gap: 8px; cursor: pointer; }
 .reveal-hint { margin: 14px 0 0; }
 #reveal-error { margin: 14px 0 0; text-align: left; }

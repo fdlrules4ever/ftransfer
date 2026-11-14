@@ -45,7 +45,10 @@
     "DEFAULT_EXPIRY_DAYS": "7",
     // Options for secrets, in hours (at most 168 = 7 days; the 8-day lifecycle rule relies on that).
     "SECRET_EXPIRY_HOURS": "1,24,168",
-    "DEFAULT_SECRET_EXPIRY_HOURS": "24"
+    "DEFAULT_SECRET_EXPIRY_HOURS": "24",
+    // Options for shared links, in days (at most 30; the 32-day lifecycle rule on links/ relies on that).
+    "LINK_EXPIRY_DAYS": "1,7,30",
+    "DEFAULT_LINK_EXPIRY_DAYS": "7"
   },
 
   // Secrets (set with `wrangler secret put`, see README):

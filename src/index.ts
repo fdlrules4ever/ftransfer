@@ -1,6 +1,7 @@
 import { assertSameOrigin, errorJson, HttpError, withSecurityHeaders } from "./http.ts";
+import { createLinks, getLinks, removeLinks } from "./links.ts";
 import { createSecret, getSecretInfo, removeSecret, revealSecret } from "./secrets.ts";
-import { cleanupExpired, cleanupExpiredSecrets } from "./storage.ts";
+import { cleanupExpired, cleanupExpiredLinks, cleanupExpiredSecrets } from "./storage.ts";
 import {
   completeMultipart,
   createTransfer,
@@ -38,10 +39,11 @@ export default {
 
   async scheduled(_controller, env): Promise<void> {
     const now = Date.now();
-    // Independent jobs: a failure in one shouldn't stop the other.
-    const [transfers, secrets] = await Promise.allSettled([
+    // Independent jobs: a failure in one shouldn't stop the others.
+    const [transfers, secrets, links] = await Promise.allSettled([
       cleanupExpired(env.BUCKET, now),
       cleanupExpiredSecrets(env.BUCKET, now),
+      cleanupExpiredLinks(env.BUCKET, now),
     ]);
     console.log(
       JSON.stringify({
@@ -51,6 +53,7 @@ export default {
             ? { deleted: transfers.value.deleted.length, remaining: transfers.value.remaining }
             : { error: String(transfers.reason) },
         secrets: secrets.status === "fulfilled" ? secrets.value : { error: String(secrets.reason) },
+        links: links.status === "fulfilled" ? links.value : { error: String(links.reason) },
       }),
     );
   },
@@ -102,6 +105,13 @@ async function routeApi(c: Ctx): Promise<Response> {
       return revealSecret(c, id);
     case "DELETE secrets/:":
       return removeSecret(c, id);
+
+    case "POST links":
+      return createLinks(c);
+    case "GET links/:":
+      return getLinks(c, id);
+    case "DELETE links/:":
+      return removeLinks(c, id);
   }
   throw new HttpError(404, "Not found.");
 }
@@ -117,6 +127,7 @@ async function routePage(c: Ctx): Promise<Response> {
   if (isShareId(path.slice(1))) return page(c, "/share.html", 200);
   // The decryption key follows in the #fragment, which browsers never send to the server.
   if (path.startsWith("/s/") && isShareId(path.slice(3))) return page(c, "/secret.html", 200);
+  if (path.startsWith("/l/") && isShareId(path.slice(3))) return page(c, "/links.html", 200);
 
   const asset = await env.ASSETS.fetch(request);
   if (asset.status === 404) return page(c, "/404.html", 404);

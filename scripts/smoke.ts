@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { decryptSecret, encryptSecret } from "../client/crypto.ts";
+import { decodeLinks, encodeLinks } from "../client/urls.ts";
 
 const BASE = (process.env.BASE_URL ?? "http://localhost:8787").replace(/\/$/, "");
 const PASSWORD = process.env.UPLOAD_PASSWORD ?? readDevVar("UPLOAD_PASSWORD");
@@ -233,7 +234,94 @@ await step("create one-time and reusable secrets", async () => {
   }
 });
 
+// --- Links (sender side) ---
+
+type LinkLimits = { maxLinks: number; maxLinksChars: number; linkExpiryDays: number[]; defaultLinkExpiryDays: number };
+const linkLimits = limits as unknown as LinkLimits;
+const LINKS = ["https://en.wikipedia.org/wiki/Apple_Inc.", "https://аpple.com/login", "example.com/a?b=1,2"];
+let shared!: { id: string; enc: Encrypted };
+
+await step("session reports link limits", async () => {
+  assert.equal(linkLimits.maxLinks, 50);
+  assert.equal(linkLimits.maxLinksChars, 20_000);
+  assert.ok(linkLimits.linkExpiryDays.includes(linkLimits.defaultLinkExpiryDays));
+  assert.ok(Math.max(...linkLimits.linkExpiryDays) <= 30);
+});
+
+await step("invalid link shares are refused", async () => {
+  const enc = await encryptSecret(encodeLinks(LINKS));
+  const bad = [
+    { body: { iv: "short", ciphertext: enc.ciphertext, expiryDays: 7 }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: "", expiryDays: 7 }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: enc.ciphertext, expiryDays: 365 }, status: 400 },
+    { body: { iv: enc.iv, ciphertext: randomBytes(130_000).toString("base64url"), expiryDays: 7 }, status: 413 },
+  ];
+  for (const { body, status } of bad) {
+    const res = await req("POST", "/api/links", body);
+    assert.equal(res.status, status, `${JSON.stringify(body).slice(0, 80)} → ${await res.clone().text()}`);
+  }
+});
+
+await step("a link share of the maximum size is accepted", async () => {
+  // Worst case for the JSON: characters that need escaping as \uXXXX (a lone surrogate).
+  const texts = Array.from({ length: linkLimits.maxLinks }, () => "\ud800".repeat(linkLimits.maxLinksChars / linkLimits.maxLinks));
+  const enc = await encryptSecret(JSON.stringify({ v: 1, links: texts }));
+  const res = await req("POST", "/api/links", { iv: enc.iv, ciphertext: enc.ciphertext, expiryDays: 1 });
+  assert.equal(res.status, 201, await res.clone().text());
+  const { id: maxId } = (await res.json()) as { id: string };
+  assert.equal((await req("DELETE", `/api/links/${maxId}`)).status, 200);
+});
+
+await step("create a link share", async () => {
+  const enc = await encryptSecret(encodeLinks(LINKS));
+  const res = await req("POST", "/api/links", { iv: enc.iv, ciphertext: enc.ciphertext, expiryDays: 7 });
+  assert.equal(res.status, 201, await res.clone().text());
+  const data = (await res.json()) as { id: string; expiresAt: number };
+  assert.match(data.id, /^[A-Za-z0-9_-]{22}$/);
+  assert.ok(Math.abs(data.expiresAt - (Date.now() + 7 * 24 * 3600_000)) < 60_000);
+  shared = { id: data.id, enc };
+});
+
 cookie = ""; // everything below is what a recipient (no login) can do
+
+await step("creating a link share without login is refused", async () => {
+  const res = await req("POST", "/api/links", { iv: shared.enc.iv, ciphertext: shared.enc.ciphertext, expiryDays: 7 });
+  assert.equal(res.status, 401);
+});
+
+await step("links page is public and doesn't contain the links", async () => {
+  const page = await req("GET", `/l/${shared.id}`);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /Links shared with you/);
+  assert.ok(!html.includes(shared.enc.ciphertext));
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+});
+
+await step("links decrypt to exactly what was shared, every time", async () => {
+  for (let i = 0; i < 2; i++) {
+    const res = await req("GET", `/api/links/${shared.id}`);
+    assert.equal(res.status, 200, await res.clone().text());
+    const data = (await res.json()) as { iv: string; ciphertext: string };
+    assert.deepEqual(decodeLinks(await decryptSecret({ key: shared.enc.key, ...data })), LINKS);
+  }
+});
+
+await step("deleting links is refused cross-origin", async () => {
+  const res = await req("DELETE", `/api/links/${shared.id}`, undefined, { Origin: "https://evil.example" });
+  assert.equal(res.status, 403);
+});
+
+await step("recipient can delete links; the link stops working", async () => {
+  assert.equal((await req("DELETE", `/api/links/${shared.id}`)).status, 200);
+  assert.equal((await req("GET", `/api/links/${shared.id}`)).status, 404);
+  assert.equal((await req("DELETE", `/api/links/${shared.id}`)).status, 404);
+});
+
+await step("a guessed links id is not found", async () => {
+  assert.equal((await req("GET", `/api/links/${"A".repeat(22)}`)).status, 404);
+  assert.equal((await req("GET", "/l/not-an-id")).status, 404);
+});
 
 await step("secret page is public and doesn't contain the secret", async () => {
   const page = await req("GET", `/s/${secrets.once.id}`);

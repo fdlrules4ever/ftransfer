@@ -16,6 +16,24 @@ export function maxCiphertextBytes(maxChars: number): number {
   return maxChars * 3 + TAG_BYTES;
 }
 
+/**
+ * Checks the { iv, ciphertext } of an encrypted secret or list of links. Only the shape and size
+ * can be checked: the server never has the key. Returns both re-encoded as base64url.
+ */
+export function readEncrypted(
+  body: Record<string, unknown>,
+  maxBytes: number,
+  messages: { invalid: string; tooLarge: string },
+): { iv: string; ciphertext: string } {
+  const iv = typeof body.iv === "string" ? base64urlDecode(body.iv) : null;
+  const ciphertext = typeof body.ciphertext === "string" ? base64urlDecode(body.ciphertext) : null;
+  if (!iv || iv.length !== IV_BYTES || !ciphertext || ciphertext.length <= TAG_BYTES) {
+    throw new HttpError(400, messages.invalid);
+  }
+  if (ciphertext.length > maxBytes) throw new HttpError(413, messages.tooLarge);
+  return { iv: base64url(iv), ciphertext: base64url(ciphertext) };
+}
+
 function secretId(id: string): string {
   if (!isShareId(id)) throw new HttpError(404, NOT_FOUND);
   return id;
@@ -35,14 +53,10 @@ export async function createSecret(c: Ctx): Promise<Response> {
   const oneTime = body.oneTime ?? true;
   if (typeof oneTime !== "boolean") throw new HttpError(400, "oneTime must be true or false.");
 
-  const iv = typeof body.iv === "string" ? base64urlDecode(body.iv) : null;
-  const ciphertext = typeof body.ciphertext === "string" ? base64urlDecode(body.ciphertext) : null;
-  if (!iv || iv.length !== IV_BYTES || !ciphertext || ciphertext.length <= TAG_BYTES) {
-    throw new HttpError(400, "The encrypted secret is invalid.");
-  }
-  if (ciphertext.length > maxCiphertextBytes(limits.maxSecretChars)) {
-    throw new HttpError(413, `A secret can be at most ${limits.maxSecretChars.toLocaleString("en")} characters.`);
-  }
+  const { iv, ciphertext } = readEncrypted(body, maxCiphertextBytes(limits.maxSecretChars), {
+    invalid: "The encrypted secret is invalid.",
+    tooLarge: `A secret can be at most ${limits.maxSecretChars.toLocaleString("en")} characters.`,
+  });
 
   const record: SecretRecord = {
     v: 1,
@@ -50,8 +64,8 @@ export async function createSecret(c: Ctx): Promise<Response> {
     createdAt: c.now,
     expiresAt: c.now + expiryHours * HOUR_MS,
     oneTime,
-    iv: base64url(iv),
-    ciphertext: base64url(ciphertext),
+    iv,
+    ciphertext,
   };
   await writeSecret(c.env.BUCKET, record);
   return json({ id: record.id, expiresAt: record.expiresAt, oneTime }, { status: 201 });

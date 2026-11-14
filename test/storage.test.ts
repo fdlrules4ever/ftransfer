@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   cleanupExpired,
+  cleanupExpiredLinks,
   cleanupExpiredSecrets,
   isExpired,
-  isSecretExpired,
+  isExpiredAt,
+  linksExist,
+  linksKey,
+  readLinks,
   secretKey,
   takeSecret,
   UPLOAD_WINDOW_MS,
+  writeLinks,
   writeSecret,
+  type LinksRecord,
   type ManifestSummary,
   type SecretRecord,
 } from "../src/storage.ts";
@@ -74,11 +80,11 @@ test("cleanup respects its per-run budget", async () => {
 // ---------------------------------------------------------------------------
 // Secrets
 
-test("secret expiry treats missing or unparseable dates as expired", () => {
-  assert.equal(isSecretExpired(NOW + 1, NOW), false);
-  assert.equal(isSecretExpired(NOW, NOW), true);
-  assert.equal(isSecretExpired(Number(undefined), NOW), true);
-  assert.equal(isSecretExpired(Number("0"), NOW), true);
+test("secret and link expiry treats missing or unparseable dates as expired", () => {
+  assert.equal(isExpiredAt(NOW + 1, NOW), false);
+  assert.equal(isExpiredAt(NOW, NOW), true);
+  assert.equal(isExpiredAt(Number(undefined), NOW), true);
+  assert.equal(isExpiredAt(Number("0"), NOW), true);
 });
 
 test("secret cleanup deletes expired secrets and tombstones only", async () => {
@@ -102,11 +108,27 @@ test("secret cleanup respects its per-run budget", async () => {
   assert.equal(objects.size, 3);
 });
 
-/** Just enough of R2Bucket for get / conditional put / delete, with etags that change on every write. */
+test("link cleanup deletes expired links only, and leaves secrets alone", async () => {
+  const objects = new Map<string, Record<string, string>>([
+    ["links/live.json", { expiresAt: String(NOW + 60_000) }],
+    ["links/old.json", { expiresAt: String(NOW - 1) }],
+    ["links/nometa.json", {}],
+    ["secrets/old.json", { expiresAt: String(NOW - 1) }],
+  ]);
+  const result = await cleanupExpiredLinks(fakeBucket(objects), NOW);
+  assert.deepEqual(result, { deleted: 2, remaining: false });
+  assert.deepEqual([...objects.keys()].sort(), ["links/live.json", "secrets/old.json"]);
+});
+
+/** Just enough of R2Bucket for head / get / conditional put / delete, with etags that change on every write. */
 function fakeSecretBucket() {
   const store = new Map<string, { body: string; etag: string; meta: Record<string, string> }>();
   let version = 0;
   const bucket = {
+    async head(key: string) {
+      const o = store.get(key);
+      return o ? { etag: o.etag, customMetadata: o.meta } : null;
+    },
     async get(key: string) {
       const o = store.get(key);
       if (!o) return null;
@@ -153,4 +175,23 @@ test("a reusable secret can be revealed repeatedly; expired secrets are removed"
   await writeSecret(bucket, secret("stale", false, NOW - 1));
   assert.equal(await takeSecret(bucket, "stale", NOW), null);
   assert.equal(store.has(secretKey("stale")), false);
+});
+
+// ---------------------------------------------------------------------------
+// Links
+
+const links = (id: string, expiresAt = NOW + 60_000): LinksRecord => ({ v: 1, id, createdAt: NOW, expiresAt, iv: "iv", ciphertext: "ct" });
+
+test("links can be read any number of times until they expire; expired links are removed on read", async () => {
+  const { store, bucket } = fakeSecretBucket();
+  await writeLinks(bucket, links("live"));
+  assert.equal(store.get(linksKey("live"))?.meta.expiresAt, String(NOW + 60_000));
+  for (let i = 0; i < 3; i++) assert.equal((await readLinks(bucket, "live", NOW))?.id, "live");
+  assert.equal(await linksExist(bucket, "live", NOW), true);
+  assert.equal(await linksExist(bucket, "missing", NOW), false);
+
+  await writeLinks(bucket, links("stale", NOW - 1));
+  assert.equal(await linksExist(bucket, "stale", NOW), false);
+  assert.equal(await readLinks(bucket, "stale", NOW), null);
+  assert.equal(store.has(linksKey("stale")), false);
 });

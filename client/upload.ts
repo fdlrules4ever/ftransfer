@@ -15,6 +15,8 @@ import {
   plural,
 } from "./common.js";
 import { encryptSecret } from "./crypto.js";
+import { linkRow } from "./linkview.js";
+import { encodeLinks, parseLinks, type Link, type Parsed } from "./urls.js";
 
 // ---------------------------------------------------------------------------
 // Types shared with the API
@@ -28,6 +30,10 @@ interface Limits {
   maxSecretChars: number;
   secretExpiryHours: number[];
   defaultSecretExpiryHours: number;
+  maxLinks: number;
+  maxLinksChars: number;
+  linkExpiryDays: number[];
+  defaultLinkExpiryDays: number;
 }
 
 interface Session {
@@ -62,6 +68,11 @@ interface CreatedSecret {
   id: string;
   expiresAt: number;
   oneTime: boolean;
+}
+
+interface CreatedLinks {
+  id: string;
+  expiresAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,22 +146,26 @@ $("signout").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST" }).catch(() => undefined);
   selected = [];
   clearSecret();
+  clearLinks();
   await init();
 });
 
 // ---------------------------------------------------------------------------
-// Tabs: Files | Secret
+// Tabs: Files | Links | Secret
 
-type Tab = "files" | "secret";
+const TAB_ORDER = ["files", "links", "secret"] as const;
+type Tab = (typeof TAB_ORDER)[number];
 const tabs: Record<Tab, { tab: HTMLButtonElement; panel: HTMLElement }> = {
   files: { tab: $<HTMLButtonElement>("tab-files"), panel: $("panel-files") },
+  links: { tab: $<HTMLButtonElement>("tab-links"), panel: $("panel-links") },
   secret: { tab: $<HTMLButtonElement>("tab-secret"), panel: $("panel-secret") },
 };
 let activeTab: Tab = "files";
 
 function selectTab(tab: Tab, focusTab = false): void {
   activeTab = tab;
-  for (const [name, { tab: button, panel }] of Object.entries(tabs) as [Tab, (typeof tabs)[Tab]][]) {
+  for (const name of TAB_ORDER) {
+    const { tab: button, panel } = tabs[name];
     const active = name === tab;
     button.setAttribute("aria-selected", String(active));
     button.tabIndex = active ? 0 : -1;
@@ -159,17 +174,26 @@ function selectTab(tab: Tab, focusTab = false): void {
   if (focusTab) tabs[tab].tab.focus();
 }
 
-tabs.files.tab.addEventListener("click", () => selectTab("files"));
-tabs.secret.tab.addEventListener("click", () => {
-  selectTab("secret");
-  secretInput.focus();
-});
+/** The field to type in on a tab, if it has one. */
+function tabInput(tab: Tab): HTMLElement | null {
+  return tab === "links" ? linksInput : tab === "secret" ? secretInput : null;
+}
+
+for (const name of TAB_ORDER) {
+  tabs[name].tab.addEventListener("click", () => {
+    selectTab(name);
+    tabInput(name)?.focus();
+  });
+}
 // Arrow keys move between tabs (WAI-ARIA tabs pattern).
 $("tab-files").parentElement!.addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
   e.preventDefault();
-  const next: Tab = e.key === "Home" ? "files" : e.key === "End" ? "secret" : activeTab === "files" ? "secret" : "files";
-  selectTab(next, true);
+  const i = TAB_ORDER.indexOf(activeTab);
+  const n = TAB_ORDER.length;
+  const next =
+    e.key === "Home" ? 0 : e.key === "End" ? n - 1 : e.key === "ArrowRight" ? (i + 1) % n : (i - 1 + n) % n;
+  selectTab(TAB_ORDER[next]!, true);
 });
 
 // ---------------------------------------------------------------------------
@@ -191,6 +215,7 @@ function setupCompose(): void {
   );
   renderSelected();
   setupSecret();
+  setupLinks();
 }
 
 function totalSelected(): number {
@@ -406,6 +431,110 @@ secretInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     void shareSecret();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Compose: links
+
+const linksInput = $<HTMLTextAreaElement>("links-input");
+const linksExpiry = $<HTMLSelectElement>("links-expiry");
+const linksShareBtn = $<HTMLButtonElement>("links-share-btn");
+let parsedLinks: Parsed[] = [];
+let sharingLinks = false;
+
+function setupLinks(): void {
+  const limits = session.limits!;
+  const current = Number(linksExpiry.value) || limits.defaultLinkExpiryDays;
+  const chosen = limits.linkExpiryDays.includes(current) ? current : limits.defaultLinkExpiryDays;
+  linksExpiry.replaceChildren(
+    ...limits.linkExpiryDays.map((d) => {
+      const opt = h("option", { value: String(d) }, plural(d, "day"));
+      opt.selected = d === chosen;
+      return opt;
+    }),
+  );
+  linksInput.maxLength = limits.maxLinksChars;
+  renderLinks();
+}
+
+function validLinks(): Link[] {
+  return parsedLinks.filter((p): p is Link => p.ok);
+}
+
+function renderLinks(): void {
+  const limits = session.limits;
+  const max = limits?.maxLinksChars ?? 0;
+  const length = linksInput.value.length;
+  $("links-count").textContent = length > max * 0.8 ? `${length.toLocaleString()} / ${max.toLocaleString()}` : "";
+
+  parsedLinks = parseLinks(linksInput.value);
+  $("links-preview").replaceChildren(...parsedLinks.map((p) => linkRow(p, "sender")));
+
+  const valid = validLinks();
+  const skipped = parsedLinks.length - valid.length;
+  const flagged = valid.filter((l) => l.warnings.length > 0).length;
+  $("links-summary").textContent =
+    parsedLinks.length === 0
+      ? ""
+      : [plural(valid.length, "link"), flagged > 0 ? `${flagged} to check` : "", skipped > 0 ? `${skipped} skipped` : ""]
+          .filter(Boolean)
+          .join(" · ");
+
+  const tooMany = limits !== undefined && valid.length > limits.maxLinks;
+  if (tooMany) showError($("links-error"), `You can share at most ${limits.maxLinks} links at once.`);
+  else if ($("links-error").dataset.kind === "limit") showError($("links-error"), null);
+  $("links-error").dataset.kind = tooMany ? "limit" : "";
+  linksShareBtn.disabled = sharingLinks || valid.length === 0 || tooMany || length > max;
+}
+
+function clearLinks(): void {
+  linksInput.value = "";
+  showError($("links-error"), null);
+  renderLinks();
+}
+
+linksInput.addEventListener("input", () => {
+  showError($("links-error"), null);
+  renderLinks();
+});
+
+async function shareLinks(): Promise<void> {
+  const links = validLinks();
+  if (links.length === 0 || sharingLinks || linksShareBtn.disabled) return;
+  sharingLinks = true;
+  showError($("links-error"), null);
+  linksShareBtn.textContent = "Encrypting…";
+  renderLinks();
+  try {
+    // The links exactly as they appear in the list; the recipient's browser checks them again.
+    const encrypted = await encryptSecret(encodeLinks(links.map((l) => l.text)));
+    const created = await api<CreatedLinks>("/api/links", {
+      method: "POST",
+      body: JSON.stringify({ iv: encrypted.iv, ciphertext: encrypted.ciphertext, expiryDays: Number(linksExpiry.value) }),
+    });
+    clearLinks();
+    showDone({
+      url: `${location.origin}/l/${created.id}#${encrypted.key}`,
+      meta: `${plural(links.length, "link")} · deleted automatically on ${formatDate(created.expiresAt)}`,
+      note: "Anyone with this link can open and delete these links until they expire.",
+      openLabel: "Open links page",
+      newLabel: "Share more links",
+    });
+  } catch (err) {
+    showError($("links-error"), `Couldn't share the links: ${errorMessage(err)}`);
+  } finally {
+    sharingLinks = false;
+    linksShareBtn.textContent = "Share links";
+    renderLinks();
+  }
+}
+
+linksShareBtn.addEventListener("click", () => void shareLinks());
+linksInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    void shareLinks();
   }
 });
 
@@ -787,9 +916,10 @@ $("share-url").addEventListener("focus", (e) => (e.target as HTMLInputElement).s
 $("new-btn").addEventListener("click", async () => {
   selected = [];
   clearSecret();
+  clearLinks();
   await refreshUsage();
   show("compose");
-  if (activeTab === "secret") secretInput.focus();
+  tabInput(activeTab)?.focus();
 });
 
 async function refreshUsage(): Promise<void> {

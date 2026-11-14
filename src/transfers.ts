@@ -59,6 +59,13 @@ export const MAX_SECRET_CHARS = 10_000;
 /** Secrets live at most 7 days, which the 8-day R2 lifecycle rule on secrets/ relies on. */
 export const MAX_SECRET_EXPIRY_HOURS = 7 * 24;
 
+/** Most links in one share, and the longest text the links field accepts (UTF-16 code units). */
+export const MAX_LINKS = 50;
+export const MAX_LINKS_CHARS = 20_000;
+
+/** Links live at most 30 days, which the 32-day R2 lifecycle rule on links/ relies on. */
+export const MAX_LINK_EXPIRY_DAYS = 30;
+
 export interface Limits {
   chunkSize: number;
   maxTotalBytes: number;
@@ -68,6 +75,10 @@ export interface Limits {
   maxSecretChars: number;
   secretExpiryHours: number[];
   defaultSecretExpiryHours: number;
+  maxLinks: number;
+  maxLinksChars: number;
+  linkExpiryDays: number[];
+  defaultLinkExpiryDays: number;
 }
 
 export function getLimits(env: Env): Limits {
@@ -75,7 +86,13 @@ export function getLimits(env: Env): Limits {
   const wanted = parsePositiveInt(env.DEFAULT_EXPIRY_DAYS, 7);
   const secretHours = parseIntList(env.SECRET_EXPIRY_HOURS, [1, 24, 168], MAX_SECRET_EXPIRY_HOURS);
   const wantedHours = parsePositiveInt(env.DEFAULT_SECRET_EXPIRY_HOURS, 24);
+  const linkDays = parseIntList(env.LINK_EXPIRY_DAYS, [1, 7, 30], MAX_LINK_EXPIRY_DAYS);
+  const wantedLinkDays = parsePositiveInt(env.DEFAULT_LINK_EXPIRY_DAYS, 7);
   return {
+    maxLinks: MAX_LINKS,
+    maxLinksChars: MAX_LINKS_CHARS,
+    linkExpiryDays: linkDays,
+    defaultLinkExpiryDays: linkDays.includes(wantedLinkDays) ? wantedLinkDays : linkDays[0]!,
     chunkSize: CHUNK_SIZE,
     maxTotalBytes: parsePositiveInt(env.MAX_TOTAL_BYTES, 9_500_000_000),
     maxFiles: parsePositiveInt(env.MAX_FILES, 200),

@@ -2,6 +2,7 @@
 //   manifests/{shareId}.json   transfer metadata (custom metadata mirrors status/expiry/size for cheap listing)
 //   files/{shareId}/{index}    the uploaded files
 //   secrets/{secretId}.json    an end-to-end encrypted secret (custom metadata mirrors expiry for cheap listing)
+//   links/{linksId}.json       an end-to-end encrypted list of links (custom metadata mirrors expiry)
 
 export type TransferStatus = "uploading" | "ready";
 
@@ -151,8 +152,8 @@ const SECRET_PREFIX = "secrets/";
 
 export const secretKey = (id: string) => `${SECRET_PREFIX}${id}.json`;
 
-/** Missing or unparseable expiry counts as expired, so leftovers never live forever. */
-export function isSecretExpired(expiresAt: number, now: number): boolean {
+/** For secrets and links. Missing or unparseable expiry counts as expired, so leftovers never live forever. */
+export function isExpiredAt(expiresAt: number, now: number): boolean {
   return !(expiresAt > now);
 }
 
@@ -172,7 +173,7 @@ export async function headSecret(
   const head = await bucket.head(secretKey(id));
   if (!head) return null;
   const expiresAt = Number(head.customMetadata?.expiresAt);
-  if (isSecretExpired(expiresAt, now)) return null;
+  if (isExpiredAt(expiresAt, now)) return null;
   return { expiresAt, oneTime: head.customMetadata?.oneTime === "1" };
 }
 
@@ -185,7 +186,7 @@ export async function takeSecret(bucket: R2Bucket, id: string, now: number): Pro
   const key = secretKey(id);
   const obj = await bucket.get(key);
   if (!obj) return null;
-  if (isSecretExpired(Number(obj.customMetadata?.expiresAt), now)) {
+  if (isExpiredAt(Number(obj.customMetadata?.expiresAt), now)) {
     await obj.text(); // drain the body before the next call
     await bucket.delete(key);
     return null;
@@ -205,17 +206,77 @@ export async function takeSecret(bucket: R2Bucket, id: string, now: number): Pro
 }
 
 /** Deletes expired secrets (and tombstones) in batches. Leftovers are picked up by the next run. */
-export async function cleanupExpiredSecrets(
-  bucket: R2Bucket,
-  now: number,
-  maxDeletes = 1000,
-): Promise<{ deleted: number; remaining: boolean }> {
+export function cleanupExpiredSecrets(bucket: R2Bucket, now: number, maxDeletes = 1000): Promise<CleanupResult> {
+  return cleanupExpiredObjects(bucket, SECRET_PREFIX, now, maxDeletes);
+}
+
+// ---------------------------------------------------------------------------
+// Links
+
+/**
+ * A shared list of links as stored in R2. Encrypted in the browser like a secret, so this record
+ * only holds ciphertext. Links are never one-time: they stay readable until they expire or are deleted.
+ */
+export interface LinksRecord {
+  v: 1;
+  id: string;
+  createdAt: number; // epoch ms
+  expiresAt: number; // epoch ms
+  iv: string; // base64url, 12 bytes
+  ciphertext: string; // base64url, includes the 16-byte GCM tag
+}
+
+const LINKS_PREFIX = "links/";
+
+export const linksKey = (id: string) => `${LINKS_PREFIX}${id}.json`;
+
+export async function writeLinks(bucket: R2Bucket, r: LinksRecord): Promise<void> {
+  await bucket.put(linksKey(r.id), JSON.stringify(r), {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: { expiresAt: String(r.expiresAt) },
+  });
+}
+
+/** Returns the links, or null if they're missing or expired. Expired links are deleted on the spot. */
+export async function readLinks(bucket: R2Bucket, id: string, now: number): Promise<LinksRecord | null> {
+  const key = linksKey(id);
+  const obj = await bucket.get(key);
+  if (!obj) return null;
+  if (isExpiredAt(Number(obj.customMetadata?.expiresAt), now)) {
+    await obj.text(); // drain the body before the next call
+    await bucket.delete(key);
+    return null;
+  }
+  return obj.json<LinksRecord>();
+}
+
+/** Whether links exist and haven't expired, without reading them. */
+export async function linksExist(bucket: R2Bucket, id: string, now: number): Promise<boolean> {
+  const head = await bucket.head(linksKey(id));
+  return head !== null && !isExpiredAt(Number(head.customMetadata?.expiresAt), now);
+}
+
+/** Deletes expired links in batches. Leftovers are picked up by the next run. */
+export function cleanupExpiredLinks(bucket: R2Bucket, now: number, maxDeletes = 1000): Promise<CleanupResult> {
+  return cleanupExpiredObjects(bucket, LINKS_PREFIX, now, maxDeletes);
+}
+
+// ---------------------------------------------------------------------------
+// Expiry cleanup for secrets and links
+
+export interface CleanupResult {
+  deleted: number;
+  remaining: boolean;
+}
+
+/** Deletes objects under `prefix` whose `expiresAt` metadata has passed, at most `maxDeletes` per run. */
+async function cleanupExpiredObjects(bucket: R2Bucket, prefix: string, now: number, maxDeletes: number): Promise<CleanupResult> {
   let deleted = 0;
   let cursor: string | undefined;
   do {
-    const page = await bucket.list({ prefix: SECRET_PREFIX, include: ["customMetadata"], cursor });
+    const page = await bucket.list({ prefix, include: ["customMetadata"], cursor });
     const expired = page.objects
-      .filter((o) => isSecretExpired(Number(o.customMetadata?.expiresAt), now))
+      .filter((o) => isExpiredAt(Number(o.customMetadata?.expiresAt), now))
       .map((o) => o.key);
     const batch = expired.slice(0, maxDeletes - deleted);
     if (batch.length > 0) await bucket.delete(batch);
