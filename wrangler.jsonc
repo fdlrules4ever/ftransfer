@@ -4,10 +4,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-11-01",
 
-  // Only reachable on the custom domain: no *.workers.dev URL, no preview URLs.
-  "workers_dev": false,
+  // Reachable at https://ftransfer.<your-subdomain>.workers.dev out of the box. To use your own
+  // domain as well, deploy with `wrangler deploy --domain transfer.example.com` (see README), or add
+  //   "routes": [{ "pattern": "transfer.example.com", "custom_domain": true }]
+  // Preview URLs stay off, so old versions never get URLs of their own.
+  "workers_dev": true,
   "preview_urls": false,
-  "routes": [{ "pattern": "transfer.franklippes.com", "custom_domain": true }],
 
   // Compiles client/*.ts into public/js before `wrangler dev` and `wrangler deploy`.
   "build": {

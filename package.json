@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "description": "Private file transfer on Cloudflare Workers + R2",
+  "license": "MIT",
+  "repository": "github:fdlrules4ever/ftransfer",
   "type": "module",
   "packageManager": "pnpm@11.18.0",
   "scripts": {
@@ -17,5 +19,18 @@
   "devDependencies": {
     "typescript": "^7.0.2",
     "wrangler": "^4.159.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "BUCKET": {
+        "description": "Private R2 bucket for files, secrets and links. Keep public access off."
+      },
+      "UPLOAD_PASSWORD": {
+        "description": "Passphrase for uploading: 12+ characters, e.g. 4-5 random words. Recipients don't need it. Values starting with `change-me` are refused."
+      },
+      "SESSION_SECRET": {
+        "description": "Random key that signs login cookies: 32+ characters, e.g. from `openssl rand -base64 32`. Changing it signs everyone out."
+      }
+    }
   }
 }

@@ -1,19 +1,23 @@
 # FTransfer
 
-A small, private alternative to WeTransfer, running entirely on Cloudflare's free tier.
+A small, private alternative to WeTransfer that you host yourself, entirely on Cloudflare's free tier.
 
-- **transfer.franklippes.com**: sign in with a shared passphrase, drop files (multiple, any size up to the storage cap), pick when they should be deleted, press **Share**, copy the link.
-- **transfer.franklippes.com/{share-id}**: anyone with the link can download the files (one by one or all at once) or delete them.
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/fdlrules4ever/ftransfer)
+
+In the examples below, `transfer.example.com` stands for wherever you host it.
+
+- **Files**: sign in with a shared passphrase, drop files (multiple, any size up to the storage cap), pick when they should be deleted, press **Share**, copy the link.
+- **transfer.example.com/{share-id}**: anyone with the link can download the files (one by one or all at once) or delete them.
 - Files are deleted automatically after 7 days by default (1, 3, 7, 14 or 30 days can be chosen).
-- **Links** (second tab): paste one or more links, separated by spaces or new lines. They're encrypted in your browser, and you get a link like **transfer.franklippes.com/l/{id}#{key}** to a page where the recipient can click them (they open in a new tab). Links expire after 1, 7 (default) or 30 days. For a link that's really secret, use a secret instead.
-- **Secrets** (third tab): paste a password, API key or note. It's encrypted in your browser, and you get a link like **transfer.franklippes.com/s/{id}#{key}**. Secrets expire after 1 hour, 1 day (default) or 7 days and can optionally be deleted after the first view.
+- **Links** (second tab): paste one or more links, separated by spaces or new lines. They're encrypted in your browser, and you get a link like **transfer.example.com/l/{id}#{key}** to a page where the recipient can click them (they open in a new tab). Links expire after 1, 7 (default) or 30 days. For a link that's really secret, use a secret instead.
+- **Secrets** (third tab): paste a password, API key or note. It's encrypted in your browser, and you get a link like **transfer.example.com/s/{id}#{key}**. Secrets expire after 1 hour, 1 day (default) or 7 days and can optionally be deleted after the first view.
 
 No accounts, no tracking, no email. Nobody gets rights to your files.
 
 ## How it works
 
 ```
-Browser ──► Worker (transfer.franklippes.com) ──► R2 bucket "ftransfer" (private)
+Browser ──► Worker (transfer.example.com) ──► R2 bucket "ftransfer" (private)
               │  serves the pages + JSON API
               │  checks the passphrase cookie on uploads
               └─ cron, every hour: deletes expired transfers, secrets and links
@@ -112,11 +116,22 @@ The cron doesn't run automatically in dev. Trigger it with:
 curl "http://localhost:8787/cdn-cgi/local/scheduled"
 ```
 
-> **Note:** this folder lives in OneDrive, and Wrangler's file watcher sometimes misses changes there. If an edit doesn't show up, stop and restart `pnpm dev`.
+> **Note:** in a synced folder (OneDrive, Dropbox), Wrangler's file watcher sometimes misses changes. If an edit doesn't show up, stop and restart `pnpm dev`.
 
-## First deployment
+## Deploy your own
 
-You need the Cloudflare account that hosts `franklippes.com`.
+You need a Cloudflare account (the free plan is enough) with R2 enabled. Afterwards the app runs at `https://ftransfer.<your-subdomain>.workers.dev`; you can add your own domain later.
+
+### With the Deploy to Cloudflare button
+
+1. Click the button at the top. Cloudflare copies this repository to your GitHub or GitLab account, creates the R2 bucket, and deploys every push to your copy automatically (Workers Builds).
+2. When it asks for `UPLOAD_PASSWORD` and `SESSION_SECRET`, enter your own values (see step 5 below). Values starting with `change-me` are refused, and the upload page stays locked until both are set properly.
+3. Open the `workers.dev` address it shows, sign in, and send yourself a file.
+4. Recommended: add the safety-net lifecycle rules (step 3 below) and, if you like, [your own domain](#your-own-domain).
+
+### By hand with Wrangler
+
+Clone the repository and install the dependencies first (see [Local development](#local-development)).
 
 **1. Log in.**
 
@@ -130,7 +145,7 @@ pnpm exec wrangler login
 pnpm exec wrangler r2 bucket create ftransfer
 ```
 
-**3. Add the safety-net lifecycle rules.** These delete leftover files and links after 32 days and leftover secrets after 8 days, and abort stale multipart uploads after 1 day.
+**3. Add the safety-net lifecycle rules.** These delete leftover files and links after 32 days and leftover secrets after 8 days, and abort stale multipart uploads after 1 day. The hourly cron already deletes everything on time; these rules only catch what it might miss. If your bucket has another name, use that instead of `ftransfer`.
 
 ```bash
 pnpm exec wrangler r2 bucket lifecycle add ftransfer expire-files files/ --expire-days 32 --force
@@ -154,7 +169,7 @@ pnpm exec wrangler r2 bucket lifecycle add ftransfer expire-links links/ --expir
 
 If the bucket already exists from an earlier version, run only the commands for rules it doesn't have yet (`pnpm exec wrangler r2 bucket lifecycle list ftransfer` shows them).
 
-**4. Deploy.** This builds the client and attaches the custom domain `transfer.franklippes.com`, creating its DNS record. It fails if a DNS record with that name already exists: remove that record first.
+**4. Deploy.** This builds the client and deploys the Worker to its `workers.dev` address.
 
 ```bash
 pnpm run deploy
@@ -173,13 +188,23 @@ pnpm exec wrangler secret put UPLOAD_PASSWORD
 pnpm exec wrangler secret put SESSION_SECRET
 ```
 
-**6. Test it.** Open https://transfer.franklippes.com, sign in, send yourself a file, and open the link in a private window. Optionally run the end-to-end test against production. It creates a small transfer (~67 MB) and a few test secrets and link shares, and deletes them again. The command uses Git Bash syntax:
+**6. Test it.** Open your Worker's address, sign in, send yourself a file, and open the link in a private window. Optionally run the end-to-end test against it. It creates a small transfer (~67 MB) and a few test secrets and link shares, and deletes them again. The command uses Git Bash syntax:
 
 ```bash
-BASE_URL=https://transfer.franklippes.com UPLOAD_PASSWORD='your passphrase' pnpm smoke
+BASE_URL=https://transfer.example.com UPLOAD_PASSWORD='your passphrase' pnpm smoke
 ```
 
 After that, `pnpm run deploy` is all you need for updates.
+
+### Your own domain
+
+The domain has to be a zone in the same Cloudflare account. Deploying with `--domain` attaches it as a custom domain and creates its DNS record and certificate. It fails if a DNS record with that name already exists: remove that record first.
+
+```bash
+pnpm exec wrangler deploy --domain transfer.example.com
+```
+
+Pass `--domain` on every deploy. With Workers Builds (the Deploy button), set the deploy command in your Worker's settings, under **Build**, to `npx wrangler deploy --domain transfer.example.com`. Alternatively, add the domain to `routes` in `wrangler.jsonc` in your own copy (the comment there shows how). To stop serving the `workers.dev` address once your domain works, set `"workers_dev": false`.
 
 ## Configuration
 
@@ -218,3 +243,7 @@ These were deliberate choices or shortcuts for a personal tool. Revisit them if 
 - **"Download all" starts separate downloads** rather than one ZIP, because zipping inside a Worker would hit the CPU limit. Browsers may ask once to allow multiple downloads.
 - **Folders can't be dropped.** Zip them first; the UI says so.
 - **Keep the tab open** while uploading. Leaving the page asks for confirmation. An interrupted upload has to be restarted; it is cleaned up automatically.
+
+## License
+
+[MIT](LICENSE)

@@ -60,3 +60,15 @@ test("configuration guard", () => {
   assert.equal(isConfigured(PASSWORD, "short"), false);
   assert.equal(isConfigured(undefined, undefined), false);
 });
+
+test("the example values from .dev.vars.example are refused", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const example = Object.fromEntries(
+    (await readFile(new URL("../.dev.vars.example", import.meta.url), "utf8"))
+      .split(/\r?\n/)
+      .filter((l) => /^[A-Z_]+=/.test(l))
+      .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1).replace(/\s+#.*$/, "").trim()]),
+  );
+  assert.equal(isConfigured(example.UPLOAD_PASSWORD, SECRET), false);
+  assert.equal(isConfigured(PASSWORD, example.SESSION_SECRET), false);
+});

@@ -1,4 +1,5 @@
-# Copy to .dev.vars for local development (`wrangler dev`). Never commit .dev.vars.
-# Production values are set with `wrangler secret put` (see README).
-UPLOAD_PASSWORD=change-me-to-a-long-passphrase
-SESSION_SECRET=change-me-to-at-least-32-random-characters
+# Copy to .dev.vars for local development (`wrangler dev`) and replace both values. Never commit .dev.vars.
+# Production values are set with `wrangler secret put` (see README). Values starting with
+# "change-me" are refused, so a deployment with these examples stays locked.
+UPLOAD_PASSWORD=change-me-to-a-long-passphrase # Passphrase for uploading: 12+ characters, e.g. 4-5 random words
+SESSION_SECRET=change-me-to-at-least-32-random-characters # Random key that signs login cookies: 32+ characters

@@ -7,17 +7,22 @@ export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 export const MIN_PASSWORD_LENGTH = 12;
 export const MIN_SECRET_LENGTH = 32;
 
-/** `__Host-` stops other *.franklippes.com sites from setting or overriding this cookie. It needs HTTPS. */
+/** `__Host-` stops sites on other subdomains from setting or overriding this cookie. It needs HTTPS. */
 export function cookieName(https: boolean): string {
   return https ? "__Host-ft_session" : "ft_session";
 }
+
+/** The example values in .dev.vars.example start with this. Deploying with them must not work. */
+const PLACEHOLDER = /^change-me/i;
 
 export function isConfigured(password: string | undefined, secret: string | undefined): boolean {
   return (
     typeof password === "string" &&
     password.length >= MIN_PASSWORD_LENGTH &&
+    !PLACEHOLDER.test(password) &&
     typeof secret === "string" &&
-    secret.length >= MIN_SECRET_LENGTH
+    secret.length >= MIN_SECRET_LENGTH &&
+    !PLACEHOLDER.test(secret)
   );
 }
 
