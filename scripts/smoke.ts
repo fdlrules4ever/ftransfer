@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { decryptSecret, encryptSecret } from "../client/crypto.ts";
+import { decryptSecret, deriveFromEasyCode, encryptSecret, formatEasyCode, newEasyCode } from "../client/crypto.ts";
 import { decodeLinks, encodeLinks } from "../client/urls.ts";
 
 const BASE = (process.env.BASE_URL ?? "http://localhost:8787").replace(/\/$/, "");
@@ -282,6 +282,7 @@ await step("create a link share", async () => {
   shared = { id: data.id, enc };
 });
 
+const senderCookie = cookie;
 cookie = ""; // everything below is what a recipient (no login) can do
 
 await step("creating a link share without login is refused", async () => {
@@ -423,6 +424,61 @@ await step("recipient can delete; the link stops working", async () => {
   assert.equal(res.status, 200);
   assert.equal((await req("GET", `/api/transfers/${id}`)).status, 404);
   assert.equal((await req("GET", `/api/transfers/${id}/files/0`)).status, 404);
+});
+
+// --- Easy-to-type links (sender, then recipient) ---
+
+cookie = senderCookie;
+
+await step("an easy file link is a 16-character code; typed variants redirect to it", async () => {
+  const res = await req("POST", "/api/transfers", { expiryDays: 1, easy: true, files: [{ name: "a.txt", size: 2, type: "text/plain" }] });
+  assert.equal(res.status, 201, await res.clone().text());
+  const easyId = ((await res.json()) as { id: string }).id;
+  assert.match(easyId, /^[0-9a-hjkmnp-tv-z]{16}$/);
+  assert.equal((await req("PUT", `/api/transfers/${easyId}/files/0`, new Uint8Array([104, 105]))).status, 200);
+  assert.equal((await req("POST", `/api/transfers/${easyId}/finalize`)).status, 200);
+
+  const canonical = `/${formatEasyCode(easyId)}`;
+  const page = await req("GET", canonical);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /Files shared with you/);
+  for (const typed of [`/${easyId}`, `/${formatEasyCode(easyId).toUpperCase()}`, `/${formatEasyCode(easyId).replace(/-/g, "%20")}`]) {
+    const r = await req("GET", typed);
+    assert.equal(r.status, 302, typed);
+    assert.equal(new URL(r.headers.get("location")!).pathname, canonical, typed);
+  }
+  assert.equal((await req("GET", `/api/transfers/${easyId}`)).status, 200);
+  assert.equal((await req("POST", "/api/transfers", { expiryDays: 1, easy: "yes", files: [{ name: "a", size: 1 }] })).status, 400);
+  assert.equal((await req("DELETE", `/api/transfers/${easyId}`)).status, 200);
+});
+
+await step("an easy secret is stored under the derived id, which can't be taken twice", async () => {
+  const code = newEasyCode();
+  const { id: derivedId, key } = await deriveFromEasyCode(code);
+  const enc = await encryptSecret(SECRET_TEXT, key);
+  const body = { id: derivedId, iv: enc.iv, ciphertext: enc.ciphertext, expiryHours: 1, oneTime: true };
+  const res = await req("POST", "/api/secrets", body);
+  assert.equal(res.status, 201, await res.clone().text());
+  assert.equal(((await res.json()) as { id: string }).id, derivedId);
+  assert.equal((await req("POST", "/api/secrets", body)).status, 409);
+  assert.equal((await req("POST", "/api/secrets", { ...body, id: "../x" })).status, 400);
+  assert.equal((await req("GET", "/s")).status, 200);
+
+  // The recipient only has the code, typed any which way.
+  const derived = await deriveFromEasyCode(formatEasyCode(code).toUpperCase());
+  const data = (await (await req("POST", `/api/secrets/${derived.id}/reveal`)).json()) as { iv: string; ciphertext: string };
+  assert.equal(await decryptSecret({ key: derived.key, ...data }), SECRET_TEXT);
+});
+
+await step("easy links are stored under the derived id", async () => {
+  const { id: derivedId, key } = await deriveFromEasyCode(newEasyCode());
+  const enc = await encryptSecret(encodeLinks(LINKS), key);
+  const res = await req("POST", "/api/links", { id: derivedId, iv: enc.iv, ciphertext: enc.ciphertext, expiryDays: 1 });
+  assert.equal(res.status, 201, await res.clone().text());
+  assert.equal((await req("GET", "/l")).status, 200);
+  const data = (await (await req("GET", `/api/links/${derivedId}`)).json()) as { iv: string; ciphertext: string };
+  assert.deepEqual(decodeLinks(await decryptSecret({ key, ...data })), LINKS);
+  assert.equal((await req("DELETE", `/api/links/${derivedId}`)).status, 200);
 });
 
 console.log("All smoke tests passed.");

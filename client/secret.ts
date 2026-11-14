@@ -1,5 +1,5 @@
 import { $, api, ApiError, errorMessage, formatDateTime, icon, maskToggle, timeUntil } from "./common.js";
-import { decryptSecret, isSecretKey } from "./crypto.js";
+import { decryptSecret, deriveFromEasyCode, isSecretKey, normalizeEasyCode } from "./crypto.js";
 
 interface SecretInfo {
   id: string;
@@ -38,11 +38,24 @@ function showMissing(title?: string, text?: string): void {
 }
 
 // /s/{id}#{key}: the key is in the fragment, which the browser never sends to the server.
-const id = location.pathname.slice("/s/".length);
-const key = location.hash.slice(1);
-const apiUrl = `/api/secrets/${encodeURIComponent(id)}`;
+// An easy link is /s#{code}: the ID and key are both derived from the code, in this browser.
+const easy = location.pathname === "/s";
+let key = location.hash.slice(1);
+let apiUrl = `/api/secrets/${encodeURIComponent(location.pathname.slice("/s/".length))}`;
+
+const MISSING_EASY = "Check the code for typos. Otherwise it was already viewed, was deleted, or has expired: ask the sender to share it again.";
 
 async function init(): Promise<void> {
+  if (easy) {
+    const code = normalizeEasyCode(key);
+    if (!code) {
+      showMissing("This code is incomplete", "The code after the # should be 16 letters and digits. Check it with the sender.");
+      return;
+    }
+    const derived = await deriveFromEasyCode(code);
+    key = derived.key;
+    apiUrl = `/api/secrets/${encodeURIComponent(derived.id)}`;
+  }
   if (!isSecretKey(key)) {
     // Don't contact the server: revealing without a usable key would only use up a one-time secret.
     showMissing(
@@ -55,7 +68,7 @@ async function init(): Promise<void> {
   try {
     info = await api<SecretInfo>(apiUrl);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) showMissing();
+    if (err instanceof ApiError && err.status === 404) showMissing(undefined, easy ? MISSING_EASY : undefined);
     else $("loading-text").textContent = errorMessage(err);
     return;
   }
@@ -171,5 +184,8 @@ dialog.querySelector("form")!.addEventListener("submit", async (e) => {
     button.disabled = false;
   }
 });
+
+// Correcting a typo in the code only changes the #, which doesn't reload the page by itself.
+window.addEventListener("hashchange", () => location.reload());
 
 void init();

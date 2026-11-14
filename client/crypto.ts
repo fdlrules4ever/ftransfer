@@ -48,12 +48,15 @@ function importKey(raw: Uint8Array<ArrayBuffer>, usage: "encrypt" | "decrypt"): 
   return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [usage]);
 }
 
-export async function encryptSecret(text: string): Promise<EncryptedSecret> {
-  const raw = crypto.getRandomValues(new Uint8Array(KEY_BYTES));
+/** Encrypts with a new random key, or with `key` (base64url, from deriveFromEasyCode) for an easy link. */
+export async function encryptSecret(text: string, key?: string): Promise<EncryptedSecret> {
+  const given = key !== undefined && isSecretKey(key) ? fromBase64url(key) : null;
+  if (key !== undefined && !given) throw new DecryptError("Invalid key.");
+  const raw = given ?? crypto.getRandomValues(new Uint8Array(KEY_BYTES));
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const key = await importKey(raw, "encrypt");
+  const cryptoKey = await importKey(raw, "encrypt");
   const plaintext = new TextEncoder().encode(text);
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, plaintext));
   return { key: toBase64url(raw), iv: toBase64url(iv), ciphertext: toBase64url(ciphertext) };
 }
 
@@ -71,4 +74,47 @@ export async function decryptSecret(secret: EncryptedSecret): Promise<string> {
   } catch {
     throw new DecryptError("This secret couldn't be decrypted. The link may be incomplete or damaged.");
   }
+}
+
+// ---------------------------------------------------------------------------
+// Easy-to-type links: 16 characters from Crockford's base32 alphabet (80 random bits), written like
+// a credit card number, k7m2-qpx9-vtd4-8hrw. No i, l, o or u, so nothing looks alike, and reading is
+// forgiving: any case, dashes or spaces, and O/I/L read as 0/1/1. Keep in sync with src/util.ts.
+//
+// For secrets and links the code is all there is: the storage ID and the AES key are both derived
+// from it, and only the ID is sent to the server. 80 bits is less than a normal link's 256-bit key,
+// so the derivation is deliberately slow (PBKDF2, 600,000 rounds): someone holding the stored
+// ciphertext would need about 2^99 hash operations to find the code by trying them all.
+
+export const EASY_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const EASY_LENGTH = 16;
+const EASY_ITERATIONS = 600_000;
+const EASY_SALT = "ftransfer easy link v1";
+
+export function newEasyCode(): string {
+  // 256 is a multiple of 32, so taking each byte mod 32 keeps every character equally likely.
+  return Array.from(crypto.getRandomValues(new Uint8Array(EASY_LENGTH)), (b) => EASY_ALPHABET[b % 32]).join("");
+}
+
+/** Reads a typed code into its canonical form (16 lowercase characters), or null if it isn't one. */
+export function normalizeEasyCode(input: string): string | null {
+  const s = input.toLowerCase().replace(/[\s-]|%20/g, "").replace(/o/g, "0").replace(/[il]/g, "1");
+  return /^[0-9a-hjkmnp-tv-z]{16}$/.test(s) ? s : null;
+}
+
+/** k7m2qpx9vtd48hrw → k7m2-qpx9-vtd4-8hrw */
+export function formatEasyCode(code: string): string {
+  return code.replace(/(.{4})(?!$)/g, "$1-");
+}
+
+/** The storage ID (base64url, same shape as a random ID) and AES key (base64url) for an easy code. */
+export async function deriveFromEasyCode(code: string): Promise<{ id: string; key: string }> {
+  const canonical = normalizeEasyCode(code);
+  if (!canonical) throw new DecryptError("This code isn't complete.");
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey("raw", enc.encode(canonical), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: enc.encode(EASY_SALT), iterations: EASY_ITERATIONS }, base, 8 * (16 + KEY_BYTES)),
+  );
+  return { id: toBase64url(bits.subarray(0, 16)), key: toBase64url(bits.subarray(16)) };
 }

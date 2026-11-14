@@ -17,7 +17,15 @@ import {
   startMultipart,
   type Ctx,
 } from "./transfers.ts";
-import { isShareId } from "./util.ts";
+import { formatEasyId, isShareId, normalizeEasyId } from "./util.ts";
+
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
 
 export default {
   async fetch(request, env): Promise<Response> {
@@ -124,10 +132,18 @@ async function routePage(c: Ctx): Promise<Response> {
 
   const path = url.pathname;
   if (path === "/") return page(c, "/index.html", 200);
-  if (isShareId(path.slice(1))) return page(c, "/share.html", 200);
+  if (/^\/[A-Za-z0-9_-]{22}$/.test(path)) return page(c, "/share.html", 200);
+  // An easy code for files, typed in any form ("K7M2 QPX9 vtd4-8hrw"): redirect to the canonical form.
+  const easy = normalizeEasyId(safeDecode(path.slice(1)));
+  if (easy !== null) {
+    const canonical = `/${formatEasyId(easy)}`;
+    if (path !== canonical) return Response.redirect(new URL(canonical, url).href, 302);
+    return page(c, "/share.html", 200);
+  }
   // The decryption key follows in the #fragment, which browsers never send to the server.
-  if (path.startsWith("/s/") && isShareId(path.slice(3))) return page(c, "/secret.html", 200);
-  if (path.startsWith("/l/") && isShareId(path.slice(3))) return page(c, "/links.html", 200);
+  // Easy links (/s#code, /l#code) carry only the code there; the page derives the ID and key from it.
+  if (path === "/s" || (path.startsWith("/s/") && isShareId(path.slice(3)))) return page(c, "/secret.html", 200);
+  if (path === "/l" || (path.startsWith("/l/") && isShareId(path.slice(3)))) return page(c, "/links.html", 200);
 
   const asset = await env.ASSETS.fetch(request);
   if (asset.status === 404) return page(c, "/404.html", 404);

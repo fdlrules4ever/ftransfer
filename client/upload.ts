@@ -14,7 +14,8 @@ import {
   maskToggle,
   plural,
 } from "./common.js";
-import { encryptSecret } from "./crypto.js";
+import { deriveFromEasyCode, encryptSecret, formatEasyCode, newEasyCode, normalizeEasyCode, type EncryptedSecret } from "./crypto.js";
+import { qrSvg } from "./qr.js";
 import { linkRow } from "./linkview.js";
 import { encodeLinks, parseLinks, type Link, type Parsed } from "./urls.js";
 
@@ -339,11 +340,46 @@ window.addEventListener("drop", (e) => {
 $("share-btn").addEventListener("click", () => void startUpload());
 
 // ---------------------------------------------------------------------------
+// Encrypted shares (secrets and links)
+
+/**
+ * Encrypts `plaintext` and stores it. The key goes after the # in the link: browsers never send
+ * that part to the server. For an easy link the # holds only a code, and the ID and key are both
+ * derived from it here; if the derived ID happens to be taken, a new code is tried.
+ */
+async function createEncrypted<T extends { id: string }>(
+  endpoint: string,
+  page: "s" | "l",
+  plaintext: string,
+  easy: boolean,
+  fields: Record<string, unknown>,
+): Promise<{ created: T; url: string; code: string | null }> {
+  const send = (encrypted: EncryptedSecret, id?: string) =>
+    api<T>(endpoint, { method: "POST", body: JSON.stringify({ ...fields, id, iv: encrypted.iv, ciphertext: encrypted.ciphertext }) });
+  if (!easy) {
+    const encrypted = await encryptSecret(plaintext);
+    const created = await send(encrypted);
+    return { created, url: `${location.origin}/${page}/${created.id}#${encrypted.key}`, code: null };
+  }
+  for (let attempt = 0; ; attempt++) {
+    const code = newEasyCode();
+    const { id, key } = await deriveFromEasyCode(code);
+    try {
+      const created = await send(await encryptSecret(plaintext, key), id);
+      return { created, url: `${location.origin}/${page}#${formatEasyCode(code)}`, code };
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 409) || attempt >= 2) throw err;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Compose: secret
 
 const secretInput = $<HTMLTextAreaElement>("secret-input");
 const secretExpiry = $<HTMLSelectElement>("secret-expiry");
 const secretOnce = $<HTMLInputElement>("secret-once");
+const secretEasy = $<HTMLInputElement>("secret-easy");
 const secretShareBtn = $<HTMLButtonElement>("secret-share-btn");
 const setSecretMasked = maskToggle($<HTMLButtonElement>("secret-toggle"), secretInput);
 let sharingSecret = false;
@@ -391,21 +427,14 @@ async function shareSecret(): Promise<void> {
   secretShareBtn.textContent = "Encrypting…";
   renderSecret();
   try {
-    const encrypted = await encryptSecret(text);
-    const created = await api<CreatedSecret>("/api/secrets", {
-      method: "POST",
-      body: JSON.stringify({
-        iv: encrypted.iv,
-        ciphertext: encrypted.ciphertext,
-        expiryHours: Number(secretExpiry.value),
-        oneTime: secretOnce.checked,
-      }),
+    const { created, url, code } = await createEncrypted<CreatedSecret>("/api/secrets", "s", text, secretEasy.checked, {
+      expiryHours: Number(secretExpiry.value),
+      oneTime: secretOnce.checked,
     });
     clearSecret();
-    // The key goes after the #: browsers never send that part to the server.
-    const url = `${location.origin}/s/${created.id}#${encrypted.key}`;
     showDone({
       url,
+      code,
       meta: created.oneTime
         ? `Secret · deleted after the first view, or on ${formatDateTime(created.expiresAt)}`
         : `Secret · deleted automatically on ${formatDateTime(created.expiresAt)}`,
@@ -440,6 +469,7 @@ secretInput.addEventListener("keydown", (e) => {
 const linksInput = $<HTMLTextAreaElement>("links-input");
 const linksExpiry = $<HTMLSelectElement>("links-expiry");
 const linksShareBtn = $<HTMLButtonElement>("links-share-btn");
+const linksEasy = $<HTMLInputElement>("links-easy");
 let parsedLinks: Parsed[] = [];
 let sharingLinks = false;
 
@@ -508,14 +538,13 @@ async function shareLinks(): Promise<void> {
   renderLinks();
   try {
     // The links exactly as they appear in the list; the recipient's browser checks them again.
-    const encrypted = await encryptSecret(encodeLinks(links.map((l) => l.text)));
-    const created = await api<CreatedLinks>("/api/links", {
-      method: "POST",
-      body: JSON.stringify({ iv: encrypted.iv, ciphertext: encrypted.ciphertext, expiryDays: Number(linksExpiry.value) }),
+    const { created, url, code } = await createEncrypted<CreatedLinks>("/api/links", "l", encodeLinks(links.map((l) => l.text)), linksEasy.checked, {
+      expiryDays: Number(linksExpiry.value),
     });
     clearLinks();
     showDone({
-      url: `${location.origin}/l/${created.id}#${encrypted.key}`,
+      url,
+      code,
       meta: `${plural(links.length, "link")} · deleted automatically on ${formatDate(created.expiresAt)}`,
       note: "Anyone with this link can open and delete these links until they expire.",
       openLabel: "Open links page",
@@ -709,6 +738,7 @@ function setBar(bar: HTMLElement, fraction: number): void {
 async function startUpload(): Promise<void> {
   const files = selected.slice();
   const expiryDays = Number(expirySelect.value);
+  const easy = $<HTMLInputElement>("files-easy").checked;
   const job: Job = { stopped: false, cancelled: false, xhrs: new Set() };
   currentJob = job;
   uploading = true;
@@ -763,7 +793,7 @@ async function startUpload(): Promise<void> {
     created = await withRetry(job, () =>
       api<Created>("/api/transfers", {
         method: "POST",
-        body: JSON.stringify({ expiryDays, files: files.map((f) => ({ name: f.name, size: f.size, type: f.type })) }),
+        body: JSON.stringify({ expiryDays, easy, files: files.map((f) => ({ name: f.name, size: f.size, type: f.type })) }),
       }),
     );
     const transfer = created;
@@ -860,6 +890,8 @@ window.addEventListener("beforeunload", (e) => {
 
 interface DoneInfo {
   url: string;
+  /** The easy code (canonical form) when the link was made easy to type. */
+  code: string | null;
   meta: string;
   note: string;
   /** Label for the "open" button, or null to hide it. */
@@ -868,8 +900,11 @@ interface DoneInfo {
 }
 
 function showFilesDone(result: Finalized): void {
+  // Easy codes are 16 characters; normal IDs are 22.
+  const code = result.id.length === 16 ? normalizeEasyCode(result.id) : null;
   showDone({
-    url: `${location.origin}/${result.id}`,
+    url: `${location.origin}/${code ? formatEasyCode(code) : result.id}`,
+    code,
     meta: `${plural(result.files.length, "file")} · ${formatBytes(result.totalBytes)} · deleted automatically on ${formatDate(result.expiresAt)}`,
     note: "Anyone with this link can download and delete these files.",
     openLabel: "Open download page",
@@ -885,6 +920,19 @@ function showDone(info: DoneInfo): void {
   open.textContent = info.openLabel ?? "";
   open.hidden = info.openLabel === null;
   $("done-meta").textContent = info.meta;
+  // Shown large and spaced like a card number, so it's easy to read out or copy by hand.
+  const codeEl = $("done-code");
+  codeEl.textContent = info.code ? formatEasyCode(info.code).replace(/-/g, " ") : "";
+  codeEl.hidden = info.code === null;
+  const qr = $("done-qr");
+  const svg = qrSvg(info.url);
+  qr.replaceChildren();
+  if (svg) {
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "QR code of the share link");
+    qr.append(svg);
+  }
+  qr.hidden = svg === null;
   $("done-note").textContent = info.note;
   $("new-btn").textContent = info.newLabel;
   resetCopyButton();

@@ -1,3 +1,4 @@
+import { normalizeEasyCode } from "./crypto.js";
 import { $, api, ApiError, errorMessage, fileBadge, formatBytes, formatDate, h, icon, plural, timeUntil } from "./common.js";
 
 interface Transfer {
@@ -21,7 +22,9 @@ function show(view: View): void {
   for (const [name, el] of Object.entries(views)) el.hidden = name !== view;
 }
 
-const id = location.pathname.slice(1);
+// /{id}, or an easy code: /k7m2-qpx9-vtd4-8hrw (the server stores it without dashes).
+const path = location.pathname.slice(1);
+const id = /^[A-Za-z0-9_-]{22}$/.test(path) ? path : (normalizeEasyCode(path) ?? path);
 const fileUrl = (index: number) => `/api/transfers/${encodeURIComponent(id)}/files/${index}`;
 
 async function init(): Promise<void> {

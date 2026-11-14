@@ -6,7 +6,11 @@ import {
   base64urlDecode,
   expectedPartSize,
   formatBytes,
+  formatEasyId,
+  isEasyId,
   isShareId,
+  newEasyId,
+  normalizeEasyId,
   newShareId,
   parseDayList,
   parseIntList,
@@ -114,4 +118,29 @@ test("formatBytes", () => {
   assert.equal(formatBytes(1500), "1.50 KB");
   assert.equal(formatBytes(9_500_000_000), "9.50 GB");
   assert.equal(formatBytes(123_400_000), "123 MB");
+});
+
+test("easy ids are 16 characters without lookalikes, and count as share ids", () => {
+  const ids = new Set(Array.from({ length: 1000 }, newEasyId));
+  assert.equal(ids.size, 1000);
+  for (const id of ids) {
+    assert.match(id, /^[0-9a-hjkmnp-tv-z]{16}$/);
+    assert.ok(isEasyId(id) && isShareId(id), id);
+  }
+  // Every character of the alphabet shows up (none is impossible or missing).
+  assert.equal(new Set([...ids].join("")).size, 32);
+});
+
+test("typed easy codes are read forgivingly", () => {
+  const id = "k7m2qpx9vtd48hrw";
+  assert.equal(formatEasyId(id), "k7m2-qpx9-vtd4-8hrw");
+  for (const typed of ["k7m2-qpx9-vtd4-8hrw", "K7M2 QPX9 VTD4 8HRW", "k7m2qpx9vtd48hrw", " k7m2-qpx9 vtd4-8hrw "]) {
+    assert.equal(normalizeEasyId(typed), id, typed);
+  }
+  assert.equal(normalizeEasyId("ab0O-1iIl-LLLL-0000"), "ab00111111110000");
+  assert.equal(normalizeEasyId("k7m2-qpx9-vtd4-8hr"), null); // too short
+  assert.equal(normalizeEasyId("k7m2-qpx9-vtd4-8hruu"), null); // too long
+  assert.equal(normalizeEasyId("k7m2-qpx9-vtd4-8hru"), null); // u isn't used
+  assert.equal(normalizeEasyId("styles.css"), null);
+  assert.equal(isEasyId("K7M2QPX9VTD48HRW"), false); // stored ids are canonical
 });

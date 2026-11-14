@@ -29,8 +29,38 @@ export function newShareId(): string {
   return base64url(crypto.getRandomValues(new Uint8Array(16)));
 }
 
+/** A share ID: either a 22-character link ID or a 16-character easy code (in its canonical form). */
 export function isShareId(s: string): boolean {
-  return /^[A-Za-z0-9_-]{22}$/.test(s);
+  return /^[A-Za-z0-9_-]{22}$/.test(s) || isEasyId(s);
+}
+
+// ---------------------------------------------------------------------------
+// Easy-to-type codes: 16 characters from Crockford's base32 alphabet (80 random bits), written
+// like a credit card number, k7m2-qpx9-vtd4-8hrw. No i, l, o or u, so nothing looks alike, and
+// reading is forgiving: any case, dashes or spaces, and O/I/L read as 0/1/1.
+// Keep in sync with client/crypto.ts.
+
+export const EASY_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz";
+const EASY_LENGTH = 16;
+
+export function newEasyId(): string {
+  // 256 is a multiple of 32, so taking each byte mod 32 keeps every character equally likely.
+  return Array.from(crypto.getRandomValues(new Uint8Array(EASY_LENGTH)), (b) => EASY_ALPHABET[b % 32]).join("");
+}
+
+export function isEasyId(s: string): boolean {
+  return /^[0-9a-hjkmnp-tv-z]{16}$/.test(s);
+}
+
+/** Reads a typed code into its canonical form (16 lowercase characters), or null if it isn't one. */
+export function normalizeEasyId(input: string): string | null {
+  const s = input.toLowerCase().replace(/[\s-]/g, "").replace(/o/g, "0").replace(/[il]/g, "1");
+  return isEasyId(s) ? s : null;
+}
+
+/** k7m2qpx9vtd48hrw → k7m2-qpx9-vtd4-8hrw */
+export function formatEasyId(id: string): string {
+  return id.replace(/(.{4})(?!$)/g, "$1-");
 }
 
 /** Makes a user-supplied file name safe to store and to put in a header. Returns null if nothing usable is left. */

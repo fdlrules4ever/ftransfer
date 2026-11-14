@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DecryptError, decryptSecret, encryptSecret, isSecretKey } from "../client/crypto.ts";
+import {
+  DecryptError,
+  decryptSecret,
+  deriveFromEasyCode,
+  encryptSecret,
+  formatEasyCode,
+  isSecretKey,
+  newEasyCode,
+  normalizeEasyCode,
+} from "../client/crypto.ts";
+import { formatEasyId, normalizeEasyId } from "../src/util.ts";
 
 test("encrypt/decrypt round trip keeps unicode, newlines and whitespace", async () => {
   for (const text of ["hunter2", "  spaced  \n\tline two\r\n", "pässwörd € 密码 🔑👨‍👩‍👧", "x".repeat(10_000)]) {
@@ -38,4 +48,31 @@ test("isSecretKey only accepts a complete 256-bit base64url key", () => {
   assert.ok(!isSecretKey("A".repeat(44)));
   assert.ok(!isSecretKey(`${"A".repeat(42)}=`));
   assert.ok(!isSecretKey(""));
+});
+
+test("an easy code derives the same id and key however it's typed, and encrypts end to end", async () => {
+  const code = newEasyCode();
+  assert.match(code, /^[0-9a-hjkmnp-tv-z]{16}$/);
+  const a = await deriveFromEasyCode(code);
+  const b = await deriveFromEasyCode(formatEasyCode(code).toUpperCase().replace(/-/g, " "));
+  assert.deepEqual(a, b);
+  assert.match(a.id, /^[A-Za-z0-9_-]{22}$/); // same shape as a random id
+  assert.ok(isSecretKey(a.key));
+
+  const other = await deriveFromEasyCode(newEasyCode());
+  assert.notEqual(a.id, other.id);
+  assert.notEqual(a.key, other.key);
+
+  const enc = await encryptSecret("via code", a.key);
+  assert.equal(enc.key, a.key);
+  assert.equal(await decryptSecret({ ...enc, key: b.key }), "via code");
+  await assert.rejects(decryptSecret({ ...enc, key: other.key }), DecryptError);
+  await assert.rejects(deriveFromEasyCode("too-short"), DecryptError);
+});
+
+test("client and server read easy codes the same way", () => {
+  for (const typed of ["k7m2-qpx9-vtd4-8hrw", "K7M2 QPX9 VTD4 8HRW", "ab0O-1iIl-LLLL-0000", "k7m2-qpx9-vtd4-8hru", "short"]) {
+    assert.equal(normalizeEasyCode(typed), normalizeEasyId(typed), typed);
+  }
+  assert.equal(formatEasyCode("k7m2qpx9vtd48hrw"), formatEasyId("k7m2qpx9vtd48hrw"));
 });

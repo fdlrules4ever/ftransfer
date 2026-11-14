@@ -1,5 +1,5 @@
 import { $, api, ApiError, errorMessage, formatDateTime, h, icon, plural, timeUntil } from "./common.js";
-import { decryptSecret, isSecretKey } from "./crypto.js";
+import { decryptSecret, deriveFromEasyCode, isSecretKey, normalizeEasyCode } from "./crypto.js";
 import { linkRow } from "./linkview.js";
 import { decodeLinks, parseLink, type Link } from "./urls.js";
 
@@ -35,12 +35,23 @@ function showMissing(title?: string, text?: string): void {
 }
 
 // /l/{id}#{key}: the key is in the fragment, which the browser never sends to the server.
-const id = location.pathname.slice("/l/".length);
-const key = location.hash.slice(1);
-const apiUrl = `/api/links/${encodeURIComponent(id)}`;
+// An easy link is /l#{code}: the ID and key are both derived from the code, in this browser.
+const easy = location.pathname === "/l";
+let key = location.hash.slice(1);
+let apiUrl = `/api/links/${encodeURIComponent(location.pathname.slice("/l/".length))}`;
 let links: Link[] = [];
 
 async function init(): Promise<void> {
+  if (easy) {
+    const code = normalizeEasyCode(key);
+    if (!code) {
+      showMissing("This code is incomplete", "The code after the # should be 16 letters and digits. Check it with the sender.");
+      return;
+    }
+    const derived = await deriveFromEasyCode(code);
+    key = derived.key;
+    apiUrl = `/api/links/${encodeURIComponent(derived.id)}`;
+  }
   if (!isSecretKey(key)) {
     showMissing(
       "This link is incomplete",
@@ -53,7 +64,9 @@ async function init(): Promise<void> {
     // Nothing gets used up, so the links are fetched and decrypted straight away.
     data = await api<Encrypted>(apiUrl);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) showMissing();
+    if (err instanceof ApiError && err.status === 404) {
+      showMissing(undefined, easy ? "Check the code for typos. Otherwise they were deleted or have expired: ask the sender to share them again." : undefined);
+    }
     else $("loading-text").textContent = errorMessage(err);
     return;
   }
@@ -146,5 +159,8 @@ dialog.querySelector("form")!.addEventListener("submit", async (e) => {
     button.disabled = false;
   }
 });
+
+// Correcting a typo in the code only changes the #, which doesn't reload the page by itself.
+window.addEventListener("hashchange", () => location.reload());
 
 void init();

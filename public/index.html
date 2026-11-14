@@ -77,6 +77,10 @@
           <label for="expiry">Delete after
             <select id="expiry"></select>
           </label>
+          <label class="check" for="files-easy" title="A short code like k7m2-qpx9-vtd4-8hrw, for when the link has to be typed over">
+            <input id="files-easy" type="checkbox">
+            Easy-to-type link
+          </label>
           <span id="summary" class="summary"></span>
         </div>
 
@@ -97,6 +101,10 @@
         <div class="options">
           <label for="links-expiry">Delete after
             <select id="links-expiry"></select>
+          </label>
+          <label class="check" for="links-easy" title="A short code like k7m2-qpx9-vtd4-8hrw, for when the link has to be typed over">
+            <input id="links-easy" type="checkbox">
+            Easy-to-type link
           </label>
           <span id="links-summary" class="summary" role="status"></span>
         </div>
@@ -123,6 +131,10 @@
           <label class="check" for="secret-once">
             <input id="secret-once" type="checkbox" checked>
             Delete after first view
+          </label>
+          <label class="check" for="secret-easy" title="A short code like k7m2-qpx9-vtd4-8hrw, for when the link has to be typed over">
+            <input id="secret-easy" type="checkbox">
+            Easy-to-type link
           </label>
         </div>
 
@@ -165,6 +177,8 @@
         <input id="share-url" type="text" readonly spellcheck="false">
         <button id="copy-btn" class="btn primary" type="button">Copy link</button>
       </div>
+      <p id="done-code" class="easy-code" hidden></p>
+      <div id="done-qr" class="qr" hidden></div>
       <p id="done-note" class="muted small">Anyone with this link can download and delete these files.</p>
       <div class="actions">
         <a id="open-link" class="btn" href="/" target="_blank" rel="noopener noreferrer">Open download page</a>

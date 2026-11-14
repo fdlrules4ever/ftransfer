@@ -26,6 +26,7 @@ import {
   formatBytes,
   isRecord,
   isShareId,
+  newEasyId,
   newShareId,
   parseDayList,
   parseIntList,
@@ -198,9 +199,10 @@ export async function createTransfer(c: Ctx): Promise<Response> {
     );
   }
 
+  if (body.easy !== undefined && typeof body.easy !== "boolean") throw new HttpError(400, "easy must be true or false.");
   const manifest: Manifest = {
     v: 1,
-    id: newShareId(),
+    id: body.easy === true ? await newEasyTransferId(c.env.BUCKET) : newShareId(),
     status: "uploading",
     createdAt: c.now,
     expiryDays,
@@ -224,6 +226,15 @@ export async function createTransfer(c: Ctx): Promise<Response> {
     },
     { status: 201 },
   );
+}
+
+/** An easy code that isn't in use yet. With 80 random bits a clash is practically impossible, but cheap to rule out. */
+async function newEasyTransferId(bucket: R2Bucket): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = newEasyId();
+    if (!(await readManifest(bucket, id))) return id;
+  }
+  throw new HttpError(500, "Couldn't create a link. Please try again.");
 }
 
 async function loadForUpload(c: Ctx, id: string, indexParam: string): Promise<{ manifest: Manifest; file: FileEntry; index: number }> {

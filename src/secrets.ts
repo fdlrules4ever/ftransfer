@@ -34,6 +34,18 @@ export function readEncrypted(
   return { iv: base64url(iv), ciphertext: base64url(ciphertext) };
 }
 
+/**
+ * The ID for a new secret or list of links. Normally random, but an easy link's ID is derived in the
+ * browser from its code (the server never sees the code), so the browser sends it along. It has the
+ * same shape as a random ID. Taken IDs are refused with 409, so the browser picks a new code.
+ */
+export async function chooseId(body: Record<string, unknown>, exists: (id: string) => Promise<boolean>): Promise<string> {
+  if (body.id === undefined) return newShareId();
+  if (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(body.id)) throw new HttpError(400, "The ID is invalid.");
+  if (await exists(body.id)) throw new HttpError(409, "This code is already in use. Please try again.");
+  return body.id;
+}
+
 function secretId(id: string): string {
   if (!isShareId(id)) throw new HttpError(404, NOT_FOUND);
   return id;
@@ -60,7 +72,7 @@ export async function createSecret(c: Ctx): Promise<Response> {
 
   const record: SecretRecord = {
     v: 1,
-    id: newShareId(),
+    id: await chooseId(body, async (id) => (await c.env.BUCKET.head(secretKey(id))) !== null),
     createdAt: c.now,
     expiresAt: c.now + expiryHours * HOUR_MS,
     oneTime,

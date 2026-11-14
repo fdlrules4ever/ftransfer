@@ -295,6 +295,11 @@ input[type="checkbox"] { width: 18px; height: 18px; margin: 0; accent-color: var
 .copy-row { display: flex; gap: 8px; margin: 20px 0 8px; }
 .copy-row input { font-family: var(--mono); font-size: 14px; min-width: 0; color: var(--lime); }
 .copy-row .btn { height: 46px; }
+/* Easy code, spaced like a card number. */
+.easy-code { margin: 4px 0 8px; font-family: var(--mono); font-size: clamp(18px, 5vw, 28px); font-weight: 600; letter-spacing: 0.06em; word-spacing: 0.2em; white-space: nowrap; color: var(--lime); text-align: center; }
+/* Always dark on white, whatever the theme, so phone cameras can read it. */
+.qr { display: flex; justify-content: center; margin: 12px 0 8px; }
+.qr svg { width: 176px; height: 176px; border-radius: 8px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
 .actions .actions { margin-top: 0; }
 .actions.end { justify-content: flex-end; }

@@ -3,10 +3,10 @@
 // Unlike secrets, links are never one-time, so they're fetched with a plain GET.
 
 import { HttpError, json, readJson } from "./http.ts";
-import { readEncrypted } from "./secrets.ts";
+import { chooseId, readEncrypted } from "./secrets.ts";
 import { linksExist, linksKey, readLinks, writeLinks, type LinksRecord } from "./storage.ts";
 import { getLimits, requireAuth, type Ctx } from "./transfers.ts";
-import { isRecord, isShareId, newShareId } from "./util.ts";
+import { isRecord, isShareId } from "./util.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TAG_BYTES = 16;
@@ -44,7 +44,7 @@ export async function createLinks(c: Ctx): Promise<Response> {
 
   const record: LinksRecord = {
     v: 1,
-    id: newShareId(),
+    id: await chooseId(body, async (id) => (await c.env.BUCKET.head(linksKey(id))) !== null),
     createdAt: c.now,
     expiresAt: c.now + expiryDays * DAY_MS,
     iv,
