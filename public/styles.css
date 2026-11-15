@@ -263,7 +263,11 @@ input:focus-visible, select:focus-visible { outline: 2px solid var(--lime); outl
 .link-row.rejected .link-icon { color: var(--muted); }
 .link-main { flex: 1; min-width: 0; }
 .link-open { display: block; color: inherit; text-decoration: none; border-radius: 8px; }
-.link-open:hover .link-host, .link-open:focus-visible .link-host { color: var(--lime); text-decoration: underline; text-underline-offset: 3px; }
+/* Recipient side: the domain is an obviously clickable link. */
+.link-open .link-host { color: var(--lime); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.link-open:hover .link-host, .link-open:focus-visible .link-host { text-decoration-thickness: 2px; }
+a.link-icon { color: var(--lime); }
+a.link-icon:hover { background: var(--accent-soft); border-color: var(--lime); }
 .link-host { font-weight: 650; overflow-wrap: anywhere; }
 /* Long addresses (signed URLs and the like) are cut off after three lines; the full one is in the tooltip. */
 .link-href {

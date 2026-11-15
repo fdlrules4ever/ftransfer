@@ -12,7 +12,7 @@ In the examples below, `transfer.example.com` stands for wherever you host it.
 - **Links** (second tab): paste one or more links, separated by spaces or new lines. They're encrypted in your browser, and you get a link like **transfer.example.com/l/{id}#{key}** to a page where the recipient can click them (they open in a new tab). Links expire after 1, 7 (default) or 30 days. For a link that's really secret, use a secret instead.
 - **Secrets** (third tab): paste a password, API key or note. It's encrypted in your browser, and you get a link like **transfer.example.com/s/{id}#{key}**. Secrets expire after 1 hour, 1 day (default) or 7 days and can optionally be deleted after the first view.
 
-- **Easy-to-type link** (a checkbox on each tab): for when a link has to be typed over, from a screen or a phone call. You get a 16-character code instead of the long link, written like a card number: **transfer.example.com/k7m2-qpx9-vtd4-8hrw** for files, **transfer.example.com/s#k7m2-qpx9-vtd4-8hrw** for secrets and **/l#…** for links. Case, dashes and spaces don't matter.
+- **Easy-to-type link** (a checkbox on each tab): for when a link has to be typed over, from a screen or a phone call. You get a 16-character code instead of the long link, written like a card number: **transfer.example.com/k7m2-qpx9-vtd4-8hrw** for files and **transfer.example.com/#k7m2-qpx9-vtd4-8hrw** for secrets and links. Case, dashes and spaces don't matter, and any code also works after `/#`: the start page looks up what it's for and opens the right page.
 - Every link is also shown as a **QR code** when it's ready, so it can be opened on a phone without typing at all.
 
 No accounts, no tracking, no email. Nobody gets rights to your files.
@@ -54,6 +54,7 @@ Browser ──► Worker (transfer.example.com) ──► R2 bucket "ftransfer" 
 
 **Easy-to-type links.** The code uses Crockford's base32 alphabet: digits and lowercase letters without i, l, o and u, so no two characters look alike. It's read forgivingly: uppercase, dashes and spaces are ignored, and O, I and L are read as 0, 1 and 1. A typed variant of a file code redirects to its canonical form.
 - The code holds 80 random bits instead of the 128 (ID) and 256 (key) bits of a normal link. That's still far too many to guess through the website.
+- Secrets and links need the `#`: everything after it stays in the browser, so the server never sees the code. The start page derives the ID and checks files, then secrets (metadata only, so a one-time secret isn't used up), then links, and continues to `/s#code` or `/l#code`. The `/s#` and `/l#` forms keep working.
 - For secrets and links the code is all there is: the browser derives both the storage ID and the AES key from it with PBKDF2 (SHA-256, 600,000 rounds), and only sends the ID. The server never sees the code or the key, so they stay end-to-end encrypted.
 - The trade-off: someone who has the stored ciphertext (Cloudflare, or whoever runs the Worker) could try every code offline. Thanks to the slow derivation that takes about 2^99 hash operations, which is out of reach in practice but less of a margin than a normal link. For the most sensitive secrets, use a normal link.
 - QR codes are drawn in the browser by a small built-in encoder (`client/qr.ts`), so the link never goes to a third-party service.

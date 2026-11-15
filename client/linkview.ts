@@ -43,7 +43,13 @@ export function linkRow(parsed: Parsed, audience: Audience, actions: Node[] = []
   return h(
     "li",
     { class: warned ? "link-row warn" : "link-row" },
-    h("span", { class: "link-icon", "aria-hidden": "true" }, icon(warned ? "warning" : "link", 18)),
+    audience === "recipient"
+      ? // The icon opens the link too (people click it); hidden from screen readers and the tab order, as the text link already does this.
+        Object.assign(
+          h("a", { class: "link-icon", target: "_blank", rel: "noopener noreferrer", tabindex: "-1", "aria-hidden": "true" }, icon(warned ? "warning" : "external", 18)),
+          { href: parsed.href },
+        )
+      : h("span", { class: "link-icon", "aria-hidden": "true" }, icon(warned ? "warning" : "link", 18)),
     main,
     ...actions,
   );

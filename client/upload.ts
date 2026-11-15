@@ -104,6 +104,8 @@ let selected: File[] = [];
 let uploading = false;
 
 async function init(): Promise<void> {
+  const code = location.pathname === "/" ? normalizeEasyCode(location.hash.slice(1)) : null;
+  if (code) return openEasyCode(code);
   try {
     session = await api<Session>("/api/session");
   } catch (err) {
@@ -120,6 +122,45 @@ async function init(): Promise<void> {
   setupCompose();
   show("compose");
 }
+
+// ---------------------------------------------------------------------------
+// Easy codes: example.com/#k7m2-qpx9-vtd4-8hrw
+//
+// One short form for every kind of share, so nobody has to type (or misread) a letter for the kind.
+// The code stays after the #, so the server never sees it. This page finds out what the code is
+// for and moves on to the right page. Checking a secret only reads its metadata, so a one-time
+// secret isn't used up.
+
+async function openEasyCode(code: string): Promise<void> {
+  show("loading");
+  $("loading-text").textContent = "Opening…";
+  const exists = (path: string) =>
+    api(path).then(
+      () => true,
+      (err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) return false;
+        throw err;
+      },
+    );
+  const formatted = formatEasyCode(code);
+  try {
+    // Files use the code itself as the ID.
+    if (await exists(`/api/transfers/${code}`)) return location.replace(`/${formatted}`);
+    const { id } = await deriveFromEasyCode(code);
+    if (await exists(`/api/secrets/${id}`)) return location.replace(`/s#${formatted}`);
+    if (await exists(`/api/links/${id}`)) return location.replace(`/l#${formatted}`);
+    $("loading-text").textContent =
+      "Nothing was found for this code. Check it for typos. Otherwise it was deleted, has expired, or a one-time secret was already viewed.";
+  } catch (err) {
+    $("loading-text").textContent = errorMessage(err);
+  }
+  document.querySelector("#view-loading .spinner")?.setAttribute("hidden", "");
+}
+
+// Correcting a typo in the code only changes the #, which doesn't reload the page by itself.
+window.addEventListener("hashchange", () => {
+  if (normalizeEasyCode(location.hash.slice(1))) location.reload();
+});
 
 // ---------------------------------------------------------------------------
 // Login
@@ -366,7 +407,8 @@ async function createEncrypted<T extends { id: string }>(
     const { id, key } = await deriveFromEasyCode(code);
     try {
       const created = await send(await encryptSecret(plaintext, key), id);
-      return { created, url: `${location.origin}/${page}#${formatEasyCode(code)}`, code };
+      // The start page works out whether the code is for a secret or links (see openEasyCode).
+      return { created, url: `${location.origin}/#${formatEasyCode(code)}`, code };
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 409) || attempt >= 2) throw err;
     }
